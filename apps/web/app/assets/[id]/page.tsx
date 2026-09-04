@@ -1,6 +1,6 @@
 'use client';
 
-import { type ChangeEvent, type FormEvent, useEffect, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
@@ -10,6 +10,7 @@ type Version = {
   status: string;
   sourceFileName?: string | null;
   note: string;
+  changeContent: string;
   fileCount: number;
   sizeBytes: number;
   createdAt: string;
@@ -34,11 +35,38 @@ function AssetIcon({ asset, large = false }: { asset: Asset; large?: boolean }) 
   </div>;
 }
 
+function RichTextEditor({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  const editorRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerHTML !== value) editorRef.current.innerHTML = value;
+  }, [value]);
+
+  const format = (command: string) => {
+    editorRef.current?.focus();
+    document.execCommand(command);
+    onChange(editorRef.current?.innerHTML || '');
+  };
+
+  return <div className="rich-editor">
+    <div className="rich-toolbar" aria-label="富文本格式工具栏">
+      <button type="button" title="加粗" aria-label="加粗" onMouseDown={event => event.preventDefault()} onClick={() => format('bold')}><strong>B</strong></button>
+      <button type="button" title="斜体" aria-label="斜体" onMouseDown={event => event.preventDefault()} onClick={() => format('italic')}><em>I</em></button>
+      <button type="button" title="下划线" aria-label="下划线" onMouseDown={event => event.preventDefault()} onClick={() => format('underline')}><u>U</u></button>
+      <button type="button" title="无序列表" onMouseDown={event => event.preventDefault()} onClick={() => format('insertUnorderedList')}>• 列表</button>
+      <button type="button" title="有序列表" onMouseDown={event => event.preventDefault()} onClick={() => format('insertOrderedList')}>1. 列表</button>
+      <button type="button" title="清除格式" onMouseDown={event => event.preventDefault()} onClick={() => format('removeFormat')}>清除格式</button>
+    </div>
+    <div ref={editorRef} className="rich-editor-content" contentEditable suppressContentEditableWarning role="textbox" aria-multiline="true" data-placeholder={placeholder} onInput={event => onChange(event.currentTarget.innerHTML)} />
+  </div>;
+}
+
 export default function AssetPage() {
   const { id } = useParams<{ id: string }>();
   const [asset, setAsset] = useState<Asset | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [note, setNote] = useState('');
+  const [changeContent, setChangeContent] = useState('');
   const [entryPath, setEntryPath] = useState('index.html');
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
@@ -60,10 +88,12 @@ export default function AssetPage() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'READY' | 'PROCESSING' | 'FAILED'>('ALL');
   const [managedVersion, setManagedVersion] = useState<Version | null>(null);
   const [versionNote, setVersionNote] = useState('');
+  const [versionChangeContent, setVersionChangeContent] = useState('');
   const [savingVersion, setSavingVersion] = useState(false);
   const [versionError, setVersionError] = useState('');
   const [deleteVersionOpen, setDeleteVersionOpen] = useState(false);
   const [deletingVersion, setDeletingVersion] = useState(false);
+  const [drawerVersion, setDrawerVersion] = useState<Version | null>(null);
 
   const load = async () => {
     const response = await fetch(`/api/v1/assets/${id}`, { credentials: 'include' });
@@ -77,6 +107,17 @@ export default function AssetPage() {
     return () => window.clearInterval(timer);
   }, [id]);
 
+  useEffect(() => {
+    if (!drawerVersion) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setDrawerVersion(null); };
+    document.addEventListener('keydown', closeOnEscape);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', closeOnEscape);
+      document.body.style.overflow = '';
+    };
+  }, [drawerVersion]);
+
   const upload = async (event: FormEvent) => {
     event.preventDefault();
     if (!file) return;
@@ -84,6 +125,7 @@ export default function AssetPage() {
     setMessage('正在上传并排队处理…');
     const body = new FormData();
     body.append('note', note);
+    body.append('changeContent', changeContent);
     body.append('entryPath', entryPath);
     body.append('file', file);
     const response = await fetch(`/api/v1/assets/${id}/versions`, { method: 'POST', body, credentials: 'include' });
@@ -94,6 +136,7 @@ export default function AssetPage() {
     }
     setFile(null);
     setNote('');
+    setChangeContent('');
     setEntryPath('index.html');
     setMessage(`“${file.name}”上传成功，Worker 正在处理版本。`);
     load();
@@ -178,6 +221,7 @@ export default function AssetPage() {
   const openVersionManager = (version: Version) => {
     setManagedVersion(version);
     setVersionNote(version.note);
+    setVersionChangeContent(version.changeContent || '');
     setVersionError('');
     setDeleteVersionOpen(false);
   };
@@ -191,7 +235,7 @@ export default function AssetPage() {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ note: versionNote })
+      body: JSON.stringify({ note: versionNote, changeContent: versionChangeContent })
     });
     setSavingVersion(false);
     if (!response.ok) {
@@ -199,7 +243,7 @@ export default function AssetPage() {
       return;
     }
     setManagedVersion(null);
-    setMessage(`v${managedVersion.versionNo} 的备注已更新。`);
+    setMessage(`v${managedVersion.versionNo} 的版本信息已更新。`);
     await load();
   };
 
@@ -263,6 +307,9 @@ export default function AssetPage() {
             <label className="field upload-note-field">上传备注<input value={note} onChange={event => setNote(event.target.value)} placeholder="例如：补充支付流程" /></label>
             <button className="button primary" disabled={uploading || !file}>{uploading ? '处理中…' : '上传版本'}</button>
           </div>
+          <label className="field change-content-field">版本变更内容 <span className="optional-label">选填 · 说明相较上一版本的变化</span>
+            <RichTextEditor value={changeContent} onChange={setChangeContent} placeholder="例如：新增支付结果页；优化订单筛选交互；修复移动端按钮遮挡。" />
+          </label>
         </form>
         {message && <p className="subtle form-message">{message}</p>}
       </section>
@@ -280,7 +327,7 @@ export default function AssetPage() {
         <p className="version-guide-footnote">“打开此版本”只临时查看这一条记录，不会改变预览版或发布版。</p>
       </div>
       <div className="timeline">
-        {visibleVersions.length ? visibleVersions.map(version => <div className="version-row" key={version.id}>
+        {visibleVersions.length ? visibleVersions.map(version => <div className="version-row clickable-version-row" key={version.id} onClick={() => setDrawerVersion(version)}>
           <div className="version-main">
             <div className="version-number">v{version.versionNo}</div>
             <div className="version-content">
@@ -293,7 +340,7 @@ export default function AssetPage() {
               {version.errorMessage && <div className="error">{version.errorMessage}</div>}
             </div>
           </div>
-          <div className="version-actions">
+          <div className="version-actions" onClick={event => event.stopPropagation()}>
             {asset.previewVersionId === version.id && <span className="pill">预览版</span>}
             {asset.releaseVersionId === version.id && <span className="pill">发布版</span>}
             {version.status === 'READY' && <>
@@ -301,6 +348,7 @@ export default function AssetPage() {
               <button className="button ghost small" disabled={asset.previewVersionId === version.id} onClick={() => mark(version.id, 'preview')}>设为预览版</button>
               <button className="button ghost small" disabled={asset.releaseVersionId === version.id} onClick={() => mark(version.id, 'release')}>设为发布版</button>
             </>}
+            <button className="button ghost small" onClick={() => setDrawerVersion(version)}>查看变更</button>
             <button className="button ghost small manage-button" onClick={() => openVersionManager(version)}>管理</button>
           </div>
         </div>) : <div className="empty">{asset.versions.length ? '没有符合当前筛选条件的版本。' : '上传第一个版本后，它会出现在这里。'}</div>}
@@ -337,11 +385,12 @@ export default function AssetPage() {
       <form className="modal" onSubmit={saveVersion}>
         <h2>管理 v{managedVersion.versionNo}</h2>
         <div className="version-manage-summary"><strong>{managedVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span className={`status ${managedVersion.status}`}>{managedVersion.status}</span></div>
-        <p className="immutable-note">版本文件、版本号和入口路径保持不可变，以确保历史可追溯；这里只能修订管理备注。</p>
+        <p className="immutable-note">版本文件、版本号和入口路径保持不可变，以确保历史可追溯；管理备注和版本变更说明可以修订。</p>
         <label className="field">版本备注<textarea autoFocus maxLength={2000} value={versionNote} onChange={event => setVersionNote(event.target.value)} placeholder="例如：产品确认版，修复支付流程" /></label>
+        <label className="field">版本变更内容 <span className="optional-label">选填 · 相较上一版本</span><RichTextEditor value={versionChangeContent} onChange={setVersionChangeContent} placeholder="填写新增、优化和修复内容" /></label>
         {managedVersionReferenced && <p className="form-hint">该版本当前被设为{asset.previewVersionId === managedVersion.id && asset.releaseVersionId === managedVersion.id ? '预览版和发布版' : asset.previewVersionId === managedVersion.id ? '预览版' : '发布版'}，需要先切换指针后才能删除。</p>}
         {versionError && <p className="error">{versionError}</p>}
-        <div className="modal-actions split-actions"><button type="button" className="button ghost-danger" disabled={savingVersion || managedVersionReferenced} onClick={() => setDeleteVersionOpen(true)}>删除版本</button><span className="action-spacer" /><button type="button" className="button ghost" disabled={savingVersion} onClick={() => setManagedVersion(null)}>取消</button><button className="button primary" disabled={savingVersion}>{savingVersion ? '保存中…' : '保存备注'}</button></div>
+        <div className="modal-actions split-actions"><button type="button" className="button ghost-danger" disabled={savingVersion || managedVersionReferenced} onClick={() => setDeleteVersionOpen(true)}>删除版本</button><span className="action-spacer" /><button type="button" className="button ghost" disabled={savingVersion} onClick={() => setManagedVersion(null)}>取消</button><button className="button primary" disabled={savingVersion}>{savingVersion ? '保存中…' : '保存版本信息'}</button></div>
       </form>
     </div>}
 
@@ -351,6 +400,18 @@ export default function AssetPage() {
         <p className="danger-note">将同时删除该版本的原始上传文件和全部预览文件，版本号不会被重新使用。此操作无法撤销。</p>
         <div className="modal-actions"><button className="button ghost" disabled={deletingVersion} onClick={() => setDeleteVersionOpen(false)}>取消</button><button className="button danger" disabled={deletingVersion} onClick={deleteVersion}>{deletingVersion ? '正在删除…' : '确认删除版本'}</button></div>
       </div>
+    </div>}
+
+    {drawerVersion && <div className="drawer-backdrop" onClick={() => setDrawerVersion(null)}>
+      <aside className="change-drawer" role="dialog" aria-modal="true" aria-labelledby="change-drawer-title" onClick={event => event.stopPropagation()}>
+        <div className="drawer-head"><div><span className="eyebrow">Version changes</span><h2 id="change-drawer-title">v{drawerVersion.versionNo} 版本变更</h2><p>{drawerVersion.versionNo > 1 ? `上传时相较于 v${drawerVersion.versionNo - 1}` : '首个版本，无上一版本可比较'}</p></div><button className="drawer-close" aria-label="关闭版本变更" onClick={() => setDrawerVersion(null)}>×</button></div>
+        <div className="drawer-meta"><span className={`status ${drawerVersion.status}`}>{drawerVersion.status}</span><strong>{drawerVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span>{new Date(drawerVersion.createdAt).toLocaleString('zh-CN')}</span></div>
+        {drawerVersion.note && <div className="drawer-note"><span>上传备注</span><p>{drawerVersion.note}</p></div>}
+        <div className="drawer-section-title">变更内容</div>
+        {drawerVersion.changeContent
+          ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: drawerVersion.changeContent }} />
+          : <div className="drawer-empty"><strong>未填写版本变更</strong><p>该版本上传时没有记录相较上一版本的变更内容，可通过“管理”补充。</p></div>}
+      </aside>
     </div>}
   </div>;
 }

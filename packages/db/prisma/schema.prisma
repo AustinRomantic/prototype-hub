@@ -79,6 +79,7 @@ model PrototypeVersion {
   fileCount     Int           @default(0) @map("file_count")
   extractedText String        @default("") @map("extracted_text")
   note          String        @default("")
+  changeContent String        @default("") @map("change_content")
   errorMessage  String?       @map("error_message")
   processingStartedAt DateTime? @map("processing_started_at")
   createdAt     DateTime      @default(now()) @map("created_at")

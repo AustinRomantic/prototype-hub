@@ -7,6 +7,7 @@ describe('shared contracts', () => {
   it('allows an empty version note but rejects notes longer than 2000 characters', () => {
     expect(versionMetadataInputSchema.safeParse({ note: '' }).success).toBe(true);
     expect(versionMetadataInputSchema.safeParse({ note: 'a'.repeat(2001) }).success).toBe(false);
+    expect(versionMetadataInputSchema.safeParse({ note: '', changeContent: 'a'.repeat(20001) }).success).toBe(false);
   });
   it('publishes an OpenAPI document for the core routes', () => {
     expect(openApiDocument.openapi).toBe('3.0.3');

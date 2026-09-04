@@ -15,7 +15,8 @@ export const assetInputSchema = z.object({
 });
 
 export const versionMetadataInputSchema = z.object({
-  note: z.string().max(2000)
+  note: z.string().max(2000),
+  changeContent: z.string().max(20000).optional()
 });
 
 export const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) });
@@ -38,7 +39,7 @@ export const openApiDocument = {
       VersionStatus: { type: 'string', enum: versionStatusSchema.options },
       ProjectInput: { type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 120 }, description: { type: 'string', maxLength: 2000 } } },
       AssetInput: { type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 120 }, description: { type: 'string', maxLength: 2000 }, tags: { type: 'array', maxItems: 20, items: { type: 'string' } } } },
-      VersionMetadataInput: { type: 'object', required: ['note'], properties: { note: { type: 'string', maxLength: 2000 } } }
+      VersionMetadataInput: { type: 'object', required: ['note'], properties: { note: { type: 'string', maxLength: 2000 }, changeContent: { type: 'string', maxLength: 20000, description: '经过安全清洗的版本变更富文本' } } }
     }
   },
   paths: {

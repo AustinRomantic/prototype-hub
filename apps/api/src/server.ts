@@ -10,6 +10,7 @@ import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema, ver
 import { prisma, Prisma, VersionStatus } from '@prototype-hub/db';
 import { deleteObject, deletePrefix, ensureBucket, getObject, putObject } from '@prototype-hub/storage';
 import { ACCEPTED_ASSET_ICON_TYPES, validateAssetIcon } from './asset-icon.js';
+import { sanitizeChangeContent } from './rich-text.js';
 import { createPreviewToken, normalizePreviewPath, PREVIEW_ROUTE_MAX_PARAM_LENGTH, sanitizeSourceFileName, verifyPreviewToken } from './security.js';
 
 const app = Fastify({
@@ -284,7 +285,7 @@ app.post('/api/v1/assets/:assetId/versions', async (request: AuthRequest, reply)
   try {
     const version = await prisma.$transaction(async tx => {
       const versionNo = ((await tx.prototypeVersion.aggregate({ _max: { versionNo: true }, where: { assetId } }))._max.versionNo ?? 0) + 1;
-      return tx.prototypeVersion.create({ data: { id: versionId, assetId, versionNo, sourceFileName, sourceKey, previewPrefix, note: multipartValue(part.fields.note).slice(0, 2000), entryPath, sizeBytes: buffer.byteLength, status: VersionStatus.PROCESSING } });
+      return tx.prototypeVersion.create({ data: { id: versionId, assetId, versionNo, sourceFileName, sourceKey, previewPrefix, note: multipartValue(part.fields.note).slice(0, 2000), changeContent: sanitizeChangeContent(multipartValue(part.fields.changeContent)), entryPath, sizeBytes: buffer.byteLength, status: VersionStatus.PROCESSING } });
     }, { isolationLevel: 'Serializable' });
     return reply.code(202).send(jsonVersion(version));
   } catch (error) {
@@ -312,8 +313,11 @@ app.patch('/api/v1/versions/:versionId', async (request: AuthRequest, reply) => 
   const version = await prisma.prototypeVersion.findFirst({ where: { id: versionId, asset: { project: { ownerId: request.userId } } } });
   if (!version) return reply.code(404).send({ error: '版本不存在' });
   const parsed = versionMetadataInputSchema.safeParse(request.body);
-  if (!parsed.success) return reply.code(400).send({ error: '版本备注不符合要求', details: parsed.error.flatten() });
-  const updated = await prisma.prototypeVersion.update({ where: { id: versionId }, data: { note: parsed.data.note } });
+  if (!parsed.success) return reply.code(400).send({ error: '版本信息不符合要求', details: parsed.error.flatten() });
+  const updated = await prisma.prototypeVersion.update({ where: { id: versionId }, data: {
+    note: parsed.data.note,
+    ...(parsed.data.changeContent === undefined ? {} : { changeContent: sanitizeChangeContent(parsed.data.changeContent) })
+  } });
   return jsonVersion(updated);
 });
 
@@ -372,6 +376,7 @@ app.get('/api/v1/search', async (request: AuthRequest) => {
       { versions: { some: { OR: [
         { extractedText: { contains: q, mode: 'insensitive' } },
         { note: { contains: q, mode: 'insensitive' } },
+        { changeContent: { contains: q, mode: 'insensitive' } },
         { sourceFileName: { contains: q, mode: 'insensitive' } },
         { entryPath: { contains: q, mode: 'insensitive' } }
       ] } } }
