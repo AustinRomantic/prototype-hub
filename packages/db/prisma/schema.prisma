@@ -1,0 +1,103 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum VersionStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String    @map("password_hash")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  sessions     Session[]
+  projects     Project[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+
+model Project {
+  id          String          @id @default(cuid())
+  name        String
+  slug        String          @unique
+  description String          @default("")
+  ownerId     String          @map("owner_id")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  updatedAt   DateTime        @updatedAt @map("updated_at")
+  owner       User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  assets      PrototypeAsset[]
+  @@index([ownerId, updatedAt])
+}
+
+model PrototypeAsset {
+  id               String            @id @default(cuid())
+  projectId        String            @map("project_id")
+  name             String
+  slug             String
+  description      String            @default("")
+  previewVersionId String?           @unique @map("preview_version_id")
+  releaseVersionId String?           @unique @map("release_version_id")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions         PrototypeVersion[]
+  tags             AssetTag[]
+  previewVersion   PrototypeVersion? @relation("previewVersion", fields: [previewVersionId], references: [id], onDelete: SetNull)
+  releaseVersion   PrototypeVersion? @relation("releaseVersion", fields: [releaseVersionId], references: [id], onDelete: SetNull)
+  @@unique([projectId, slug])
+  @@index([projectId, updatedAt])
+}
+
+model PrototypeVersion {
+  id            String        @id @default(cuid())
+  assetId       String        @map("asset_id")
+  versionNo     Int           @map("version_no")
+  status        VersionStatus  @default(PROCESSING)
+  entryPath     String        @default("index.html") @map("entry_path")
+  sourceFileName String?      @map("source_file_name")
+  sourceKey     String        @map("source_key")
+  previewPrefix String        @map("preview_prefix")
+  checksum      String        @default("")
+  sizeBytes     BigInt        @default(0) @map("size_bytes")
+  fileCount     Int           @default(0) @map("file_count")
+  extractedText String        @default("") @map("extracted_text")
+  note          String        @default("")
+  errorMessage  String?       @map("error_message")
+  processingStartedAt DateTime? @map("processing_started_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  asset         PrototypeAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  previewFor    PrototypeAsset? @relation("previewVersion")
+  releaseFor    PrototypeAsset? @relation("releaseVersion")
+  @@unique([assetId, versionNo])
+  @@index([status, createdAt])
+}
+
+model Tag {
+  id      String     @id @default(cuid())
+  name    String     @unique
+  assets  AssetTag[]
+}
+
+model AssetTag {
+  assetId String          @map("asset_id")
+  tagId   String          @map("tag_id")
+  asset   PrototypeAsset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  tag     Tag             @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  @@id([assetId, tagId])
+}

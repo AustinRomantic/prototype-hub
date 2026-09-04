@@ -1,0 +1,73 @@
+# Prototype Hub
+
+本地优先的 HTML/ZIP 原型资产平台，将产品原型按“项目 → 资产 → 不可变版本”管理，并提供隔离预览、发布/预览版本指针和全文检索。
+
+## 一键启动
+
+前置条件：Mac 上安装 Docker Desktop，并确保 8080、55432、9000、9001 端口未被占用。PostgreSQL 映射到宿主机 55432，容器内部仍使用标准 5432。
+
+```bash
+cp .env.example .env
+docker compose -f infra/docker-compose.yml up --build
+```
+
+启动完成后：
+
+- 管理端：`http://localhost:8080`
+- 隔离预览域：`http://preview.localhost:8080`
+- MinIO 控制台：`http://localhost:9001`
+- 默认管理账号：`.env` 中的 `ADMIN_USERNAME` / `ADMIN_PASSWORD`
+
+首次启动前请修改 `.env` 中的管理员密码、`SESSION_SECRET` 和 `PREVIEW_SECRET`。停止服务使用：
+
+```bash
+docker compose -f infra/docker-compose.yml down
+```
+
+不要使用 `down -v`，除非确认要同时删除 PostgreSQL 与 MinIO 的持久化数据。
+
+## 本地开发
+
+先启动基础设施：
+
+```bash
+docker compose -f infra/docker-compose.yml up -d postgres minio
+env 'DATABASE_URL=postgresql://prototype:prototype@localhost:55432/prototype_hub?schema=public' pnpm db:migrate
+pnpm db:generate
+pnpm dev
+```
+
+开发入口为 `http://localhost:3000`；Next.js 会将 `/api` 转发到 `http://localhost:4000`，预览也由 4000 端口提供。
+
+## 常用检查
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+## 数据与安全边界
+
+- 原始上传和解压后的预览内容保存在 S3 兼容对象存储，不依赖宿主机业务路径。
+- HTML/ZIP 上传后生成不可变版本；只能新增版本，或切换当前预览版/发布版。
+- ZIP 拒绝目录穿越、绝对路径、符号链接、服务端可执行文件、超量文件和解压炸弹。
+- 预览使用短期签名 URL，并运行在独立来源和 sandbox iframe 中。
+- 上传内容只按静态资源返回，不执行 PHP、Shell 等服务端代码。
+- 当前 CSP 禁止原型主动发起网络请求；如未来需要真实 API 联调，应通过白名单配置扩展，不能直接放开。
+
+## 备份与恢复
+
+数据库备份：
+
+```bash
+docker compose -f infra/docker-compose.yml exec -T postgres pg_dump -U prototype -d prototype_hub -Fc > prototype-hub-db.dump
+```
+
+MinIO 数据保存在 Docker volume `minio_data`。生产迁云时应使用对象存储自带的版本控制和生命周期策略；本地可通过 MinIO Client 将 `prototype-assets` bucket 镜像到备份目录。数据库和对象存储必须使用同一备份时间点恢复，避免版本记录与文件不一致。
+
+## 云迁移
+
+应用只依赖 PostgreSQL 和 S3 协议。迁移云服务器时替换 `DATABASE_URL`、`S3_*`、域名与 HTTPS 配置即可；将 `COOKIE_SECURE=true`，并把 `WEB_ORIGIN`、`PREVIEW_ORIGIN` 配成两个不同的 HTTPS 来源。
+
+更完整的模块、数据流和安全说明见 [架构文档](docs/ARCHITECTURE.md)。

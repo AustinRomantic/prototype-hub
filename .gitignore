@@ -1,0 +1,17 @@
+node_modules
+dist
+.next
+.env
+.env.*
+!.env.example
+coverage
+playwright-report
+test-results
+.pnpm-store
+*.tsbuildinfo
+*.dump
+*.sql.gz
+*.log
+.DS_Store
+.idea
+.vscode

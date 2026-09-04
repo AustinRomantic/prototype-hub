@@ -1,0 +1,17 @@
+{
+  "name": "prototype-hub",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm --filter './packages/**' build && concurrently \"pnpm --filter @prototype-hub/api dev\" \"pnpm --filter @prototype-hub/worker dev\" \"pnpm --filter @prototype-hub/web dev\"",
+    "db:generate": "pnpm --filter @prototype-hub/db prisma:generate",
+    "db:migrate": "pnpm --filter @prototype-hub/db prisma:migrate",
+    "typecheck": "pnpm --filter './packages/**' build && pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.9.2"
+  }
+}

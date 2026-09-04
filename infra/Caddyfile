@@ -1,0 +1,17 @@
+http://localhost {
+  handle /api/* {
+    reverse_proxy api:4000
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
+}
+
+http://preview.localhost {
+  handle /preview/* {
+    reverse_proxy api:4000
+  }
+
+  respond 404
+}
