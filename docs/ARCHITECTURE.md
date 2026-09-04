@@ -11,6 +11,8 @@
 
 登录后可通过 `/api/v1/openapi.json` 获取核心 REST 接口的 OpenAPI 3.0 文档。
 
+原型资产元数据可编辑，图标通过独立的受认证接口上传和读取。数据库只保存 `icon_key`，图片内容存储在对象存储的 `asset-icons/{projectId}/{assetId}/` 前缀下；替换、移除或删除资产时同步清理旧对象。
+
 ## 上传数据流
 
 1. API 校验扩展名、文件签名和 100MB 上限，将原文件写入对象存储。
@@ -25,6 +27,7 @@
 - 版本内容、入口路径和版本号创建后不提供修改接口。
 - `preview_version_id` 和 `release_version_id` 是资产上的可变指针，回滚只是重新指向历史 `READY` 版本。
 - 当前预览版或发布版不能删除；删除普通版本、资产或项目时同步清理对象存储。
+- 项目资产列表的“查看发布版”只使用 `release_version_id`，不会用最新版本或预览版本代替。
 - PostgreSQL 是元数据事实来源，对象存储 Key 始终带 project、asset、version 三层 ID。
 
 ## 预览隔离

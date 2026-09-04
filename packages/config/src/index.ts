@@ -16,6 +16,7 @@ const envSchema = z.object({
   PREVIEW_ORIGIN: z.string().url().default('http://localhost:4000'),
   COOKIE_SECURE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
+  ASSET_ICON_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
   EXTRACTED_MAX_BYTES: z.coerce.number().int().positive().default(500 * 1024 * 1024),
   MAX_FILES: z.coerce.number().int().positive().default(5000)
 });

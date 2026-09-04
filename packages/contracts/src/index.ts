@@ -43,6 +43,7 @@ export const openApiDocument = {
     '/api/v1/projects/{projectId}': { get: secured('项目详情'), patch: secured('更新项目'), delete: secured('删除项目') },
     '/api/v1/projects/{projectId}/assets': { get: secured('项目原型列表'), post: secured('创建原型资产') },
     '/api/v1/assets/{assetId}': { get: secured('原型资产详情'), patch: secured('更新原型资产'), delete: secured('删除原型资产') },
+    '/api/v1/assets/{assetId}/icon': { get: secured('读取原型资产图标'), post: secured('上传原型资产图标'), delete: secured('删除原型资产图标') },
     '/api/v1/assets/{assetId}/versions': { get: secured('版本列表'), post: secured('上传 HTML/ZIP 版本') },
     '/api/v1/versions/{versionId}': { get: secured('版本详情'), delete: secured('删除未引用版本') },
     '/api/v1/versions/{versionId}/set-preview': { post: secured('设置当前预览版') },

@@ -51,6 +51,7 @@ model PrototypeAsset {
   name             String
   slug             String
   description      String            @default("")
+  iconKey          String?           @map("icon_key")
   previewVersionId String?           @unique @map("preview_version_id")
   releaseVersionId String?           @unique @map("release_version_id")
   createdAt        DateTime          @default(now()) @map("created_at")

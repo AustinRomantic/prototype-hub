@@ -9,6 +9,7 @@ import { config } from '@prototype-hub/config';
 import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema } from '@prototype-hub/contracts';
 import { prisma, Prisma, VersionStatus } from '@prototype-hub/db';
 import { deleteObject, deletePrefix, ensureBucket, getObject, putObject } from '@prototype-hub/storage';
+import { ACCEPTED_ASSET_ICON_TYPES, validateAssetIcon } from './asset-icon.js';
 import { createPreviewToken, normalizePreviewPath, PREVIEW_ROUTE_MAX_PARAM_LENGTH, sanitizeSourceFileName, verifyPreviewToken } from './security.js';
 
 const app = Fastify({
@@ -21,7 +22,11 @@ type AuthRequest = FastifyRequest & { userId?: string };
 const sha256 = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
 const slug = (value: string) => value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled';
 const jsonVersion = <T extends { sizeBytes: bigint }>(version: T) => ({ ...version, sizeBytes: Number(version.sizeBytes) });
-const jsonAsset = <T extends { versions: Array<{ sizeBytes: bigint }> }>(asset: T) => ({ ...asset, versions: asset.versions.map(jsonVersion) });
+const jsonIconAsset = <T extends { id: string; iconKey: string | null; updatedAt: Date }>(asset: T) => {
+  const { iconKey, ...rest } = asset;
+  return { ...rest, iconUrl: iconKey ? `/api/v1/assets/${asset.id}/icon?v=${asset.updatedAt.getTime()}` : null };
+};
+const jsonAsset = <T extends { id: string; iconKey: string | null; updatedAt: Date; versions: Array<{ sizeBytes: bigint }> }>(asset: T) => jsonIconAsset({ ...asset, versions: asset.versions.map(jsonVersion) });
 const isPublic = (url: string) => url.startsWith('/health') || url.startsWith('/api/v1/auth') || url.startsWith('/preview/');
 
 async function requireUser(request: AuthRequest, reply: FastifyReply) {
@@ -120,7 +125,7 @@ app.get('/api/v1/projects/:projectId', async (request: AuthRequest, reply) => {
   const { projectId } = request.params as { projectId: string };
   const project = await prisma.project.findFirst({ where: { id: projectId, ownerId: request.userId }, include: { assets: { include: { tags: { include: { tag: true } }, _count: { select: { versions: true } } }, orderBy: { updatedAt: 'desc' } } } });
   if (!project) return reply.code(404).send({ error: '项目不存在' });
-  return project;
+  return { ...project, assets: project.assets.map(jsonIconAsset) };
 });
 
 app.patch('/api/v1/projects/:projectId', async (request: AuthRequest, reply) => {
@@ -135,15 +140,17 @@ app.delete('/api/v1/projects/:projectId', async (request: AuthRequest, reply) =>
   const { projectId } = request.params as { projectId: string };
   if (!(await getOwnedProject(projectId, request.userId!))) return reply.code(404).send({ error: '项目不存在' });
   const versions = await prisma.prototypeVersion.findMany({ where: { asset: { projectId } }, select: { sourceKey: true, previewPrefix: true } });
+  const assets = await prisma.prototypeAsset.findMany({ where: { projectId }, select: { iconKey: true } });
   await prisma.project.delete({ where: { id: projectId } });
-  await Promise.allSettled(versions.map(deleteStoredVersion));
+  await Promise.allSettled([...versions.map(deleteStoredVersion), ...assets.flatMap(asset => asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
   return { ok: true };
 });
 
 app.get('/api/v1/projects/:projectId/assets', async (request: AuthRequest, reply) => {
   const { projectId } = request.params as { projectId: string };
   if (!(await getOwnedProject(projectId, request.userId!))) return reply.code(404).send({ error: '项目不存在' });
-  return prisma.prototypeAsset.findMany({ where: { projectId }, include: { tags: { include: { tag: true } }, _count: { select: { versions: true } } }, orderBy: { updatedAt: 'desc' } });
+  const assets = await prisma.prototypeAsset.findMany({ where: { projectId }, include: { tags: { include: { tag: true } }, _count: { select: { versions: true } } }, orderBy: { updatedAt: 'desc' } });
+  return assets.map(jsonIconAsset);
 });
 
 app.post('/api/v1/projects/:projectId/assets', async (request: AuthRequest, reply) => {
@@ -152,7 +159,7 @@ app.post('/api/v1/projects/:projectId/assets', async (request: AuthRequest, repl
   const parsed = assetInputSchema.safeParse(request.body);
   if (!parsed.success) return reply.code(400).send({ error: '原型名称无效' });
   const asset = await prisma.prototypeAsset.create({ data: { projectId, name: parsed.data.name, slug: `${slug(parsed.data.name)}-${crypto.randomBytes(3).toString('hex')}`, description: parsed.data.description, tags: { create: parsed.data.tags.map(name => ({ tag: { connectOrCreate: { where: { name }, create: { name } } } })) } }, include: { tags: { include: { tag: true } } } });
-  return reply.code(201).send(asset);
+  return reply.code(201).send(jsonIconAsset(asset));
 });
 
 app.get('/api/v1/assets/:assetId', async (request: AuthRequest, reply) => {
@@ -173,7 +180,73 @@ app.patch('/api/v1/assets/:assetId', async (request: AuthRequest, reply) => {
     await prisma.assetTag.deleteMany({ where: { assetId } });
     await prisma.prototypeAsset.update({ where: { id: assetId }, data: { ...data, tags: { create: tags.map(name => ({ tag: { connectOrCreate: { where: { name }, create: { name } } } })) } } });
   } else await prisma.prototypeAsset.update({ where: { id: assetId }, data });
-  return prisma.prototypeAsset.findUnique({ where: { id: assetId }, include: { tags: { include: { tag: true } } } });
+  const updated = await prisma.prototypeAsset.findUniqueOrThrow({ where: { id: assetId }, include: { tags: { include: { tag: true } } } });
+  return jsonIconAsset(updated);
+});
+
+app.get('/api/v1/assets/:assetId/icon', async (request: AuthRequest, reply) => {
+  const { assetId } = request.params as { assetId: string };
+  const asset = await getOwnedAsset(assetId, request.userId!);
+  if (!asset?.iconKey) return reply.code(404).send({ error: '原型图标不存在' });
+  const object = await getObject(asset.iconKey).catch(() => null);
+  if (!object?.Body || !('transformToByteArray' in object.Body) || typeof object.Body.transformToByteArray !== 'function') return reply.code(404).send({ error: '原型图标不存在' });
+  const body = await object.Body.transformToByteArray();
+  return reply
+    .header('Content-Security-Policy', "default-src 'none'; sandbox")
+    .header('X-Content-Type-Options', 'nosniff')
+    .header('Cache-Control', 'private, max-age=300')
+    .type(object.ContentType || 'application/octet-stream')
+    .send(Buffer.from(body));
+});
+
+app.post('/api/v1/assets/:assetId/icon', async (request: AuthRequest, reply) => {
+  const { assetId } = request.params as { assetId: string };
+  const asset = await getOwnedAsset(assetId, request.userId!);
+  if (!asset) return reply.code(404).send({ error: '原型不存在' });
+
+  let part;
+  try {
+    part = await request.file({ limits: { fileSize: config.ASSET_ICON_MAX_BYTES, files: 1 } });
+  } catch {
+    return reply.code(413).send({ error: '图标超过 2MB 限制' });
+  }
+  if (!part) return reply.code(400).send({ error: `请选择 ${ACCEPTED_ASSET_ICON_TYPES} 图标` });
+
+  let buffer: Buffer;
+  try {
+    buffer = await part.toBuffer();
+  } catch {
+    return reply.code(413).send({ error: '图标超过 2MB 限制' });
+  }
+  if (part.file.truncated || buffer.byteLength > config.ASSET_ICON_MAX_BYTES) return reply.code(413).send({ error: '图标超过 2MB 限制' });
+
+  let icon;
+  try {
+    icon = validateAssetIcon(part.filename, buffer);
+  } catch (error) {
+    return reply.code(400).send({ error: error instanceof Error ? error.message : '图标内容无效' });
+  }
+
+  const iconKey = `asset-icons/${asset.projectId}/${assetId}/${crypto.randomUUID()}${icon.extension}`;
+  await putObject(iconKey, buffer, icon.contentType);
+  try {
+    const updated = await prisma.prototypeAsset.update({ where: { id: assetId }, data: { iconKey } });
+    if (asset.iconKey) await deleteObject(asset.iconKey).catch(error => app.log.error(error, 'failed to clean replaced asset icon'));
+    return jsonIconAsset(updated);
+  } catch (error) {
+    await deleteObject(iconKey).catch(() => undefined);
+    throw error;
+  }
+});
+
+app.delete('/api/v1/assets/:assetId/icon', async (request: AuthRequest, reply) => {
+  const { assetId } = request.params as { assetId: string };
+  const asset = await getOwnedAsset(assetId, request.userId!);
+  if (!asset) return reply.code(404).send({ error: '原型不存在' });
+  if (!asset.iconKey) return { ok: true };
+  await prisma.prototypeAsset.update({ where: { id: assetId }, data: { iconKey: null } });
+  await deleteObject(asset.iconKey).catch(error => app.log.error(error, 'failed to clean deleted asset icon'));
+  return { ok: true };
 });
 
 app.delete('/api/v1/assets/:assetId', async (request: AuthRequest, reply) => {
@@ -182,7 +255,7 @@ app.delete('/api/v1/assets/:assetId', async (request: AuthRequest, reply) => {
   if (!asset) return reply.code(404).send({ error: '原型不存在' });
   const versions = await prisma.prototypeVersion.findMany({ where: { assetId }, select: { sourceKey: true, previewPrefix: true } });
   await prisma.prototypeAsset.delete({ where: { id: assetId } });
-  await Promise.allSettled(versions.map(deleteStoredVersion));
+  await Promise.allSettled([...versions.map(deleteStoredVersion), ...(asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
   return { ok: true };
 });
 
@@ -296,7 +369,7 @@ app.get('/api/v1/search', async (request: AuthRequest) => {
     ...(status && Object.values(VersionStatus).includes(status) ? { versions: { some: { status } } } : {})
   };
   const rows = await prisma.prototypeAsset.findMany({ where, include: { project: { select: { id: true, name: true } }, tags: { include: { tag: true } }, versions: { orderBy: { versionNo: 'desc' }, take: 1, select: { id: true, versionNo: true, status: true, sourceFileName: true, createdAt: true } } }, orderBy: { updatedAt: 'desc' }, take: 100 });
-  return rows;
+  return rows.map(jsonIconAsset);
 });
 
 app.get('/preview/:versionId/:token/*', async (request, reply) => {
