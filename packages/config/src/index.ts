@@ -17,6 +17,11 @@ const envSchema = z.object({
   COOKIE_SECURE: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   UPLOAD_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
   ASSET_ICON_MAX_BYTES: z.coerce.number().int().positive().default(2 * 1024 * 1024),
+  MATERIAL_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
+  MATERIALS_PER_VERSION_MAX: z.coerce.number().int().positive().default(100),
+  MATERIAL_VERSION_TOTAL_BYTES: z.coerce.number().int().positive().default(1024 * 1024 * 1024),
+  MATERIAL_TRASH_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  MATERIAL_CONVERT_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   EXTRACTED_MAX_BYTES: z.coerce.number().int().positive().default(500 * 1024 * 1024),
   MAX_FILES: z.coerce.number().int().positive().default(5000)
 });

@@ -2,9 +2,9 @@
 
 ## 组件
 
-- `apps/web`：Next.js 管理端，负责登录、项目/资产管理、上传、版本时间线、搜索和 iframe 预览容器。
-- `apps/api`：Fastify REST API，负责认证、业务权限、元数据、上传入口、签名 Token 和静态预览代理。
-- `apps/worker`：轮询 PostgreSQL 中待处理版本，安全解析 HTML/ZIP，上传预览资源并生成文本索引与 manifest。
+- `apps/web`：Next.js 管理端，负责登录、项目/资产管理、版本工作空间、材料管理、搜索和 iframe 预览容器。
+- `apps/api`：Fastify REST API，负责认证、业务权限、元数据、上传/下载入口、签名 Token 和预览代理。
+- `apps/worker`：轮询 PostgreSQL 中待处理的原型版本和迭代材料，处理 HTML/ZIP、Office/PDF/文本预览并生成搜索索引。
 - `packages/db`：Prisma 数据模型和显式 SQL migration。
 - `packages/storage`：MinIO、S3、OSS、COS 可复用的 S3 适配层。
 - `packages/contracts`：前后端共享的 Zod 输入与状态类型。
@@ -22,12 +22,25 @@
 5. Worker 生成 `manifest.json`，提取 HTML 可见文本，将版本设为 `READY`；首个成功版本自动成为预览版。
 6. 处理失败时版本设为 `FAILED`，保留原始上传以便追查，并删除可能已写入的半成品预览文件。
 
+## 版本工作空间与材料数据流
+
+1. 时间线整行进入 `/versions/{versionId}`；版本操作按钮阻止行跳转，分别负责变更抽屉、原型预览和版本管理。
+2. Web 将批量选择的文件拆成单文件请求，以固定并发数 3 上传。每个文件有独立队列状态，失败不会中断其他文件。
+3. API 校验所有权、100MB 上限、扩展名、浏览器 MIME、文件签名与 UTF-8 文本编码，并拦截 OOXML/OLE 宏内容；随后在 Serializable 事务中检查每版本 100 个材料和 1GB 总容量。
+4. API 把原件写入 `materials/{projectId}/{assetId}/{versionId}/{materialId}/original.{ext}`，创建 `PROCESSING` 记录并返回 `202`。
+5. Worker 领取任务：图片直接使用原件预览，PDF 提取文本，Markdown 生成白名单清洗后的 HTML，TXT 安全返回纯文本，Office 由 LibreOffice Headless 转为 PDF 后提取文字。
+6. 预览衍生物写入同一材料前缀，成功状态为 `READY`；转换失败为 `FAILED`，保留原件以便下载和重试。
+
+材料容器以非 root 用户运行，根文件系统只读，只有独立 `/tmp` 可写，并移除 Linux capabilities。转换有超时和容器内存/CPU限制，不依赖第三方在线预览服务。
+
+材料内容不可覆盖，只允许修改显示名称、分类和标签。活动名称通过数据库部分唯一索引实现不区分大小写唯一；并发重名上传遇到事务冲突时重新计算 `(2)/(3)` 名称。普通删除只设置 `deleted_at`，30 天内可恢复；Worker 定期永久删除到期对象与记录。删除上层版本、资产或项目时直接级联清理全部材料和预览衍生物。
+
 ## 不可变与一致性
 
 - 版本内容、入口路径和版本号创建后不提供修改接口；上传备注和版本变更富文本属于管理元数据，允许修订但不影响版本工件。富文本写入前由 API 按标签白名单清洗，管理端只渲染清洗后的内容。
 - `preview_version_id` 和 `release_version_id` 是资产上的可变指针，回滚只是重新指向历史 `READY` 版本。预览指针用于内部验收候选，发布指针用于稳定共享入口。
 - 时间线排序和状态筛选只改变前端展示，不持久化顺序，也不会改变递增版本号。
-- 当前预览版或发布版不能删除；删除普通版本、资产或项目时同步清理对象存储。
+- 当前预览版或发布版不能删除；删除普通版本、资产或项目时同步清理原型和材料对象存储。
 - 项目资产列表的“查看发布版”只使用 `release_version_id`，不会用最新版本或预览版本代替。
 - PostgreSQL 是元数据事实来源，对象存储 Key 始终带 project、asset、version 三层 ID。
 
@@ -40,4 +53,4 @@
 
 ## 检索
 
-PostgreSQL migration 启用 `pg_trgm`，为项目、资产、版本文字/备注和标签建立 GIN 索引。API 支持关键词、项目、标签、版本状态和创建时间筛选；当前限制返回 100 条，未来可在保持接口语义的情况下替换为 OpenSearch。
+PostgreSQL migration 启用 `pg_trgm`，为项目、资产、版本文字/备注、材料名称、材料正文和标签建立 GIN 索引。全局搜索并行查询原型资产和迭代材料，并按两组展示；材料可按项目、资产、版本、分类和标签筛选。当前每组限制返回 100 条，未来可在保持接口语义的情况下替换为 OpenSearch。

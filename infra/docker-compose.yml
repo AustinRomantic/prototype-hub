@@ -53,6 +53,11 @@ services:
       PREVIEW_ORIGIN: http://preview.localhost:8080
       COOKIE_SECURE: "false"
       ASSET_ICON_MAX_BYTES: ${ASSET_ICON_MAX_BYTES:-2097152}
+      MATERIAL_MAX_BYTES: ${MATERIAL_MAX_BYTES:-104857600}
+      MATERIALS_PER_VERSION_MAX: ${MATERIALS_PER_VERSION_MAX:-100}
+      MATERIAL_VERSION_TOTAL_BYTES: ${MATERIAL_VERSION_TOTAL_BYTES:-1073741824}
+      MATERIAL_TRASH_RETENTION_DAYS: ${MATERIAL_TRASH_RETENTION_DAYS:-30}
+      MATERIAL_CONVERT_TIMEOUT_MS: ${MATERIAL_CONVERT_TIMEOUT_MS:-120000}
     command: sh -c "pnpm --filter @prototype-hub/db prisma:migrate && pnpm --filter @prototype-hub/api start"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
@@ -66,7 +71,7 @@ services:
   worker:
     build:
       context: ..
-      dockerfile: infra/Dockerfile
+      dockerfile: infra/Dockerfile.worker
       target: runtime
     environment:
       DATABASE_URL: postgresql://prototype:prototype@postgres:5432/prototype_hub?schema=public
@@ -81,7 +86,21 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123456}
       MAX_FILES: ${MAX_FILES:-5000}
       EXTRACTED_MAX_BYTES: ${EXTRACTED_MAX_BYTES:-524288000}
-    command: pnpm --filter @prototype-hub/worker start
+      MATERIAL_MAX_BYTES: ${MATERIAL_MAX_BYTES:-104857600}
+      MATERIALS_PER_VERSION_MAX: ${MATERIALS_PER_VERSION_MAX:-100}
+      MATERIAL_VERSION_TOTAL_BYTES: ${MATERIAL_VERSION_TOTAL_BYTES:-1073741824}
+      MATERIAL_TRASH_RETENTION_DAYS: ${MATERIAL_TRASH_RETENTION_DAYS:-30}
+      MATERIAL_CONVERT_TIMEOUT_MS: ${MATERIAL_CONVERT_TIMEOUT_MS:-120000}
+    command: node apps/worker/dist/worker.js
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 2g
+    cpus: 2
     depends_on:
       api: { condition: service_healthy }
 

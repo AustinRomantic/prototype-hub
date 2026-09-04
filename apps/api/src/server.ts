@@ -11,11 +11,12 @@ import { prisma, Prisma, VersionStatus } from '@prototype-hub/db';
 import { deleteObject, deletePrefix, ensureBucket, getObject, putObject } from '@prototype-hub/storage';
 import { ACCEPTED_ASSET_ICON_TYPES, validateAssetIcon } from './asset-icon.js';
 import { sanitizeChangeContent } from './rich-text.js';
+import { registerMaterialRoutes } from './material-routes.js';
 import { createPreviewToken, normalizePreviewPath, PREVIEW_ROUTE_MAX_PARAM_LENGTH, sanitizeSourceFileName, verifyPreviewToken } from './security.js';
 
 const app = Fastify({
   logger: true,
-  bodyLimit: config.UPLOAD_MAX_BYTES + 1024 * 1024,
+  bodyLimit: Math.max(config.UPLOAD_MAX_BYTES, config.MATERIAL_MAX_BYTES) + 1024 * 1024,
   maxParamLength: PREVIEW_ROUTE_MAX_PARAM_LENGTH
 });
 type AuthRequest = FastifyRequest & { userId?: string };
@@ -80,8 +81,9 @@ async function init() {
 
 await app.register(cookie, { secret: config.SESSION_SECRET });
 await app.register(cors, { origin: config.WEB_ORIGIN, credentials: true });
-await app.register(multipart, { limits: { fileSize: config.UPLOAD_MAX_BYTES, files: 1 } });
+await app.register(multipart, { limits: { fileSize: Math.max(config.UPLOAD_MAX_BYTES, config.MATERIAL_MAX_BYTES), files: 1 } });
 app.addHook('preHandler', requireUser);
+await registerMaterialRoutes(app);
 
 app.get('/health', async () => ({ ok: true }));
 app.get('/api/v1/openapi.json', async () => openApiDocument);
@@ -143,7 +145,7 @@ app.delete('/api/v1/projects/:projectId', async (request: AuthRequest, reply) =>
   const versions = await prisma.prototypeVersion.findMany({ where: { asset: { projectId } }, select: { sourceKey: true, previewPrefix: true } });
   const assets = await prisma.prototypeAsset.findMany({ where: { projectId }, select: { iconKey: true } });
   await prisma.project.delete({ where: { id: projectId } });
-  await Promise.allSettled([...versions.map(deleteStoredVersion), ...assets.flatMap(asset => asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
+  await Promise.allSettled([...versions.map(deleteStoredVersion), deletePrefix(`materials/${projectId}/`), ...assets.flatMap(asset => asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
   return { ok: true };
 });
 
@@ -256,7 +258,7 @@ app.delete('/api/v1/assets/:assetId', async (request: AuthRequest, reply) => {
   if (!asset) return reply.code(404).send({ error: '原型不存在' });
   const versions = await prisma.prototypeVersion.findMany({ where: { assetId }, select: { sourceKey: true, previewPrefix: true } });
   await prisma.prototypeAsset.delete({ where: { id: assetId } });
-  await Promise.allSettled([...versions.map(deleteStoredVersion), ...(asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
+  await Promise.allSettled([...versions.map(deleteStoredVersion), deletePrefix(`materials/${asset.projectId}/${assetId}/`), ...(asset.iconKey ? [deleteObject(asset.iconKey)] : [])]);
   return { ok: true };
 });
 
@@ -337,7 +339,7 @@ app.delete('/api/v1/versions/:versionId', async (request: AuthRequest, reply) =>
   if (!version) return reply.code(404).send({ error: '版本不存在' });
   if (version.asset.previewVersionId === versionId || version.asset.releaseVersionId === versionId) return reply.code(409).send({ error: '当前预览版或发布版不能删除' });
   await prisma.prototypeVersion.delete({ where: { id: versionId } });
-  await deleteStoredVersion(version).catch(error => app.log.error(error, 'failed to clean deleted version objects'));
+  await Promise.allSettled([deleteStoredVersion(version), deletePrefix(`materials/${version.asset.projectId}/${version.assetId}/${version.id}/`)]);
   return { ok: true };
 });
 

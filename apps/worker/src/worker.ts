@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { config } from '@prototype-hub/config';
-import { prisma, VersionStatus, type PrototypeVersion } from '@prototype-hub/db';
+import { MaterialStatus, prisma, VersionStatus, type PrototypeVersion } from '@prototype-hub/db';
 import { deletePrefix, getObject, putObject } from '@prototype-hub/storage';
 import { extractHtmlText, unpackPrototype } from './archive.js';
+import { processMaterial } from './material.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -65,11 +66,54 @@ async function claimAndProcess() {
   return true;
 }
 
+async function claimAndProcessMaterial() {
+  const staleBefore = new Date(Date.now() - 15 * 60 * 1000);
+  const candidate = await prisma.versionMaterial.findFirst({
+    where: { status: MaterialStatus.PROCESSING, deletedAt: null, OR: [{ processingStartedAt: null }, { processingStartedAt: { lt: staleBefore } }] },
+    orderBy: { createdAt: 'asc' }
+  });
+  if (!candidate) return false;
+  const claimedAt = new Date();
+  const claim = await prisma.versionMaterial.updateMany({
+    where: { id: candidate.id, status: MaterialStatus.PROCESSING, deletedAt: null, processingStartedAt: candidate.processingStartedAt },
+    data: { processingStartedAt: claimedAt, errorMessage: null }
+  });
+  if (claim.count !== 1) return true;
+  try {
+    const result = await processMaterial({ ...candidate, processingStartedAt: claimedAt });
+    await prisma.versionMaterial.updateMany({
+      where: { id: candidate.id, status: MaterialStatus.PROCESSING },
+      data: { status: MaterialStatus.READY, previewKey: result.previewKey, extractedText: result.extractedText, errorMessage: null }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '未知材料处理错误';
+    await prisma.versionMaterial.update({ where: { id: candidate.id }, data: { status: MaterialStatus.FAILED, errorMessage: message.slice(0, 1000) } });
+  }
+  return true;
+}
+
+async function purgeExpiredMaterials() {
+  const expiredBefore = new Date(Date.now() - config.MATERIAL_TRASH_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const expired = await prisma.versionMaterial.findMany({ where: { deletedAt: { lt: expiredBefore } }, orderBy: { deletedAt: 'asc' }, take: 20 });
+  for (const material of expired) {
+    await deletePrefix(`${path.posix.dirname(material.sourceKey)}/`).catch(error => console.error('failed to purge material objects', error));
+    await prisma.versionMaterial.deleteMany({ where: { id: material.id, deletedAt: { lt: expiredBefore } } });
+  }
+  return expired.length > 0;
+}
+
 async function main() {
   console.log('prototype worker started');
+  let nextPurgeAt = 0;
   while (true) {
-    const processed = await claimAndProcess();
-    if (!processed) await new Promise(resolve => setTimeout(resolve, 1500));
+    const processedVersion = await claimAndProcess();
+    const processedMaterial = await claimAndProcessMaterial();
+    let purged = false;
+    if (Date.now() >= nextPurgeAt) {
+      purged = await purgeExpiredMaterials();
+      nextPurgeAt = Date.now() + 60 * 1000;
+    }
+    if (!processedVersion && !processedMaterial && !purged) await new Promise(resolve => setTimeout(resolve, 1500));
   }
 }
 

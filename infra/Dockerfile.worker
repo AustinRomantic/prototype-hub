@@ -1,15 +1,19 @@
 FROM node:22-alpine AS runtime
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+ARG APK_MIRROR=mirrors.tuna.tsinghua.edu.cn
 ARG PRISMA_ENGINES_MIRROR=https://registry.npmmirror.com/-/binary/prisma
 ENV COREPACK_NPM_REGISTRY=$NPM_REGISTRY \
     npm_config_registry=$NPM_REGISTRY \
     PRISMA_ENGINES_MIRROR=$PRISMA_ENGINES_MIRROR
 WORKDIR /app
-RUN corepack enable
+RUN corepack enable \
+  && sed -i "s/dl-cdn.alpinelinux.org/$APK_MIRROR/g" /etc/apk/repositories \
+  && apk add --no-cache libreoffice poppler-utils font-noto-cjk
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY apps ./apps
 COPY packages ./packages
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @prototype-hub/db prisma:generate
 RUN pnpm build
-EXPOSE 3000 4000
+USER node
+CMD ["node", "apps/worker/dist/worker.js"]

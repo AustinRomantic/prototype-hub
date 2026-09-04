@@ -13,6 +13,28 @@ enum VersionStatus {
   FAILED
 }
 
+enum MaterialCategory {
+  PRODUCT
+  DATA
+  BACKEND
+  FRONTEND
+  TEST
+  DESIGN
+  OTHER
+}
+
+enum MaterialStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum MaterialPreviewKind {
+  IMAGE
+  PDF
+  TEXT
+}
+
 model User {
   id           String    @id @default(cuid())
   username     String    @unique
@@ -86,8 +108,36 @@ model PrototypeVersion {
   asset         PrototypeAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
   previewFor    PrototypeAsset? @relation("previewVersion")
   releaseFor    PrototypeAsset? @relation("releaseVersion")
+  materials     VersionMaterial[]
   @@unique([assetId, versionNo])
   @@index([status, createdAt])
+}
+
+model VersionMaterial {
+  id                  String              @id @default(cuid())
+  versionId           String              @map("version_id")
+  category            MaterialCategory    @default(OTHER)
+  displayName         String              @map("display_name")
+  originalFileName    String              @map("original_file_name")
+  extension           String
+  mimeType            String              @map("mime_type")
+  sourceKey           String              @map("source_key")
+  previewKey          String?             @map("preview_key")
+  previewKind         MaterialPreviewKind @map("preview_kind")
+  status              MaterialStatus      @default(PROCESSING)
+  sizeBytes           BigInt              @map("size_bytes")
+  checksum            String
+  tags                String[]            @default([])
+  extractedText       String              @default("") @map("extracted_text")
+  errorMessage        String?             @map("error_message")
+  processingStartedAt DateTime?           @map("processing_started_at")
+  deletedAt           DateTime?           @map("deleted_at")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
+  version             PrototypeVersion    @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId, deletedAt, createdAt])
+  @@index([status, processingStartedAt])
 }
 
 model Tag {

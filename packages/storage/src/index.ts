@@ -3,6 +3,7 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   HeadBucketCommand,
   ListObjectsV2Command,
   PutObjectCommand,
@@ -32,8 +33,12 @@ export async function putObject(key: string, body: Uint8Array | Buffer | string,
   await s3.send(new PutObjectCommand({ Bucket: config.S3_BUCKET, Key: key, Body: body, ContentType: contentType }));
 }
 
-export async function getObject(key: string) {
-  return s3.send(new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key }));
+export async function getObject(key: string, range?: string) {
+  return s3.send(new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key, ...(range ? { Range: range } : {}) }));
+}
+
+export async function headObject(key: string) {
+  return s3.send(new HeadObjectCommand({ Bucket: config.S3_BUCKET, Key: key }));
 }
 
 export async function deleteObject(key: string) {

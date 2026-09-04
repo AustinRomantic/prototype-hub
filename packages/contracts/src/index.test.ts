@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assetInputSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from './index.js';
+import { assetInputSchema, materialMetadataInputSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from './index.js';
 
 describe('shared contracts', () => {
   it('normalizes optional project fields', () => expect(projectInputSchema.parse({ name: '商城' }).description).toBe(''));
@@ -13,5 +13,11 @@ describe('shared contracts', () => {
     expect(openApiDocument.openapi).toBe('3.0.3');
     expect(openApiDocument.paths['/api/v1/assets/{assetId}/versions'].post.summary).toContain('上传');
     expect(openApiDocument.paths['/api/v1/versions/{versionId}'].patch.summary).toContain('备注');
+    expect(openApiDocument.paths['/api/v1/versions/{versionId}/materials'].post.summary).toContain('材料');
+  });
+  it('validates editable material metadata', () => {
+    expect(materialMetadataInputSchema.safeParse({ category: 'BACKEND', tags: ['API'] }).success).toBe(true);
+    expect(materialMetadataInputSchema.safeParse({}).success).toBe(false);
+    expect(materialMetadataInputSchema.safeParse({ tags: Array(11).fill('tag') }).success).toBe(false);
   });
 });

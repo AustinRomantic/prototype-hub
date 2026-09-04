@@ -1,8 +1,8 @@
 # Prototype Hub
 
-本地优先的 HTML/ZIP 原型资产平台，将产品原型按“项目 → 资产 → 不可变版本”管理，并提供隔离预览、发布/预览版本指针和全文检索。
+本地优先的 HTML/ZIP 原型资产平台，将产品原型按“项目 → 资产 → 不可变版本 → 迭代材料”管理，并提供隔离预览、发布/预览版本指针和全文检索。
 
-原型资产支持名称、描述、标签和独立图标维护；项目页可直接打开资产当前选定的发布版本。删除资产时会同步清理它的原始包、预览文件和图标。
+原型资产支持名称、描述、标签和独立图标维护；项目页可直接打开资产当前选定的发布版本。每个原型版本都有独立工作空间，可归档并预览产品、数据、后端、前端、测试和设计材料。
 
 ## 一键启动
 
@@ -12,6 +12,9 @@
 cp .env.example .env
 docker compose -f infra/docker-compose.yml up --build
 ```
+
+Worker 镜像包含 LibreOffice、PDF 工具和中文字体，首次构建下载量较大，后续会复用 Docker 缓存。
+Dockerfile 默认使用国内镜像安装 Node 依赖、Prisma 引擎和 Alpine 转换工具；如需改用其他源，可传入 `NPM_REGISTRY`、`PRISMA_ENGINES_MIRROR` 或 `APK_MIRROR` build arg。
 
 启动完成后：
 
@@ -56,6 +59,12 @@ pnpm build
 - 预览版用于内部验收和测试，可以频繁切换；发布版是已确认的稳定版本，也是项目页“查看发布版”的固定入口。
 - 只有未被预览版或发布版指针引用的版本才能删除，删除时同步清理原始包和预览文件。
 - 上传版本时可选填受限富文本格式的“版本变更内容”，用于记录相较上一版本的变化；时间线可通过整行或“查看变更”在右侧抽屉阅读，并支持后续修订。
+- 点击版本时间线整行进入版本工作空间；“查看变更”“打开此版本”“管理”仍保持各自独立操作，不会误触页面跳转。
+- 版本材料支持 PDF、DOC/DOCX、XLS/XLSX、PPT/PPTX、PNG/JPEG/WebP、Markdown 和 UTF-8 TXT。Office 文件由隔离 Worker 转为 PDF，下载始终返回未经转换的原文件。
+- Office 上传会拒绝宏扩展名，并检查 OOXML 的 `vbaProject` 内容与旧版 OLE 宏目录，防止仅改扩展名绕过限制。
+- 材料原文件不可覆盖，可修改显示名称、分类和标签。同版本活动材料名称不区分大小写唯一，重复上传会自动追加 `(2)`。
+- 单个材料最大 100MB，每个版本最多 100 个材料、原文件总量最大 1GB；回收站仍计入限额。软删除文件保留 30 天，可恢复或提前永久删除。
+- 图片不做 OCR；可搜索材料名称、标签及 PDF/Office/Markdown/TXT 中提取出的文字。
 - 资产图标支持 PNG、JPEG、WebP，默认最大 2MB，保存在同一套 S3 兼容对象存储中。
 - ZIP 拒绝目录穿越、绝对路径、符号链接、服务端可执行文件、超量文件和解压炸弹。
 - 预览使用短期签名 URL，并运行在独立来源和 sandbox iframe 中。
@@ -70,7 +79,7 @@ pnpm build
 docker compose -f infra/docker-compose.yml exec -T postgres pg_dump -U prototype -d prototype_hub -Fc > prototype-hub-db.dump
 ```
 
-MinIO 数据保存在 Docker volume `minio_data`。生产迁云时应使用对象存储自带的版本控制和生命周期策略；本地可通过 MinIO Client 将 `prototype-assets` bucket 镜像到备份目录。数据库和对象存储必须使用同一备份时间点恢复，避免版本记录与文件不一致。
+MinIO 数据保存在 Docker volume `minio_data`，其中包括原型源文件、预览文件、资产图标以及 `materials/` 下的材料原件和预览衍生物。生产迁云时应使用对象存储自带的版本控制和生命周期策略；本地可通过 MinIO Client 将 `prototype-assets` bucket 镜像到备份目录。数据库和对象存储必须使用同一备份时间点恢复，避免版本记录与文件不一致。
 
 ## 云迁移
 
