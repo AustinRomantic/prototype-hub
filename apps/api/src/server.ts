@@ -6,7 +6,7 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import bcrypt from 'bcryptjs';
 import { config } from '@prototype-hub/config';
-import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema } from '@prototype-hub/contracts';
+import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from '@prototype-hub/contracts';
 import { prisma, Prisma, VersionStatus } from '@prototype-hub/db';
 import { deleteObject, deletePrefix, ensureBucket, getObject, putObject } from '@prototype-hub/storage';
 import { ACCEPTED_ASSET_ICON_TYPES, validateAssetIcon } from './asset-icon.js';
@@ -305,6 +305,16 @@ app.get('/api/v1/versions/:versionId', async (request: AuthRequest, reply) => {
   const version = await prisma.prototypeVersion.findFirst({ where: { id: versionId, asset: { project: { ownerId: request.userId } } } });
   if (!version) return reply.code(404).send({ error: '版本不存在' });
   return jsonVersion(version);
+});
+
+app.patch('/api/v1/versions/:versionId', async (request: AuthRequest, reply) => {
+  const { versionId } = request.params as { versionId: string };
+  const version = await prisma.prototypeVersion.findFirst({ where: { id: versionId, asset: { project: { ownerId: request.userId } } } });
+  if (!version) return reply.code(404).send({ error: '版本不存在' });
+  const parsed = versionMetadataInputSchema.safeParse(request.body);
+  if (!parsed.success) return reply.code(400).send({ error: '版本备注不符合要求', details: parsed.error.flatten() });
+  const updated = await prisma.prototypeVersion.update({ where: { id: versionId }, data: { note: parsed.data.note } });
+  return jsonVersion(updated);
 });
 
 async function pointVersion(request: AuthRequest, reply: FastifyReply, field: 'previewVersionId' | 'releaseVersionId') {

@@ -14,10 +14,15 @@ export const assetInputSchema = z.object({
   tags: z.array(z.string().trim().min(1).max(40)).max(20).optional().default([])
 });
 
+export const versionMetadataInputSchema = z.object({
+  note: z.string().max(2000)
+});
+
 export const loginSchema = z.object({ username: z.string().min(1), password: z.string().min(1) });
 
 export type ProjectInput = z.infer<typeof projectInputSchema>;
 export type AssetInput = z.infer<typeof assetInputSchema>;
+export type VersionMetadataInput = z.infer<typeof versionMetadataInputSchema>;
 
 export type ApiError = { error: string; details?: unknown };
 
@@ -32,7 +37,8 @@ export const openApiDocument = {
       Error: { type: 'object', required: ['error'], properties: { error: { type: 'string' } } },
       VersionStatus: { type: 'string', enum: versionStatusSchema.options },
       ProjectInput: { type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 120 }, description: { type: 'string', maxLength: 2000 } } },
-      AssetInput: { type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 120 }, description: { type: 'string', maxLength: 2000 }, tags: { type: 'array', maxItems: 20, items: { type: 'string' } } } }
+      AssetInput: { type: 'object', required: ['name'], properties: { name: { type: 'string', maxLength: 120 }, description: { type: 'string', maxLength: 2000 }, tags: { type: 'array', maxItems: 20, items: { type: 'string' } } } },
+      VersionMetadataInput: { type: 'object', required: ['note'], properties: { note: { type: 'string', maxLength: 2000 } } }
     }
   },
   paths: {
@@ -45,7 +51,7 @@ export const openApiDocument = {
     '/api/v1/assets/{assetId}': { get: secured('原型资产详情'), patch: secured('更新原型资产'), delete: secured('删除原型资产') },
     '/api/v1/assets/{assetId}/icon': { get: secured('读取原型资产图标'), post: secured('上传原型资产图标'), delete: secured('删除原型资产图标') },
     '/api/v1/assets/{assetId}/versions': { get: secured('版本列表'), post: secured('上传 HTML/ZIP 版本') },
-    '/api/v1/versions/{versionId}': { get: secured('版本详情'), delete: secured('删除未引用版本') },
+    '/api/v1/versions/{versionId}': { get: secured('版本详情'), patch: secured('更新版本备注'), delete: secured('删除未引用版本') },
     '/api/v1/versions/{versionId}/set-preview': { post: secured('设置当前预览版') },
     '/api/v1/versions/{versionId}/set-release': { post: secured('设置当前发布版') },
     '/api/v1/versions/{versionId}/preview-token': { get: secured('生成短期预览地址') },
