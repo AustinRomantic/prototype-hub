@@ -1,5 +1,7 @@
 # Prototype Hub 迭代路线与需求清单
 
+> 状态更新（2026-09-07）：本文保留为初始 M0–M4 需求拆解，排期以 [已确认的八期计划](DEVELOPMENT_PLAN.md) 为准。第一期已交付、待用户验收，见 [交付说明](PHASE1_DELIVERY.md)。会话分工见 [文档入口](README.md)。下文“待办”及优先顺序反映初始评估时点。
+
 日期：2026-09-07 · 状态：建议排期稿  
 对应：[产品规划与 PRD](/Users/davidduan/Desktop/backend/prototype-hub/docs/PRODUCT_PRD.md)  
 本文任务均为待办建议；不代表本次已实施功能。里程碑编号用于表达依赖和交付顺序，不等同于当前应用版本号。

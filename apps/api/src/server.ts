@@ -1,27 +1,31 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import bcrypt from 'bcryptjs';
 import { config } from '@prototype-hub/config';
-import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from '@prototype-hub/contracts';
+import { assetInputSchema, loginSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema, versionUploadMetadataSchema } from '@prototype-hub/contracts';
 import { prisma, Prisma, VersionStatus } from '@prototype-hub/db';
 import { deleteObject, deletePrefix, ensureBucket, getObject, putObject } from '@prototype-hub/storage';
 import { ACCEPTED_ASSET_ICON_TYPES, validateAssetIcon } from './asset-icon.js';
 import { sanitizeChangeContent } from './rich-text.js';
 import { registerMaterialRoutes } from './material-routes.js';
+import { createPrototypeVersion, InvalidBaselineError, originalVersionFileName } from './version.js';
+import { sendOriginalDownload } from './download.js';
+import { searchPrototypes } from './search.js';
 import { createPreviewToken, normalizePreviewPath, PREVIEW_ROUTE_MAX_PARAM_LENGTH, sanitizeSourceFileName, verifyPreviewToken } from './security.js';
 
-const app = Fastify({
-  logger: true,
+export const app = Fastify({
+  logger: process.env.NODE_ENV !== 'test',
   bodyLimit: Math.max(config.UPLOAD_MAX_BYTES, config.MATERIAL_MAX_BYTES) + 1024 * 1024,
   maxParamLength: PREVIEW_ROUTE_MAX_PARAM_LENGTH
 });
 type AuthRequest = FastifyRequest & { userId?: string };
 
-const sha256 = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+const sha256 = (value: string | Buffer) => crypto.createHash('sha256').update(value).digest('hex');
 const slug = (value: string) => value.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled';
 const jsonVersion = <T extends { sizeBytes: bigint }>(version: T) => ({ ...version, sizeBytes: Number(version.sizeBytes) });
 const jsonIconAsset = <T extends { id: string; iconKey: string | null; updatedAt: Date }>(asset: T) => {
@@ -268,15 +272,22 @@ app.post('/api/v1/assets/:assetId/versions', async (request: AuthRequest, reply)
   if (!asset) return reply.code(404).send({ error: '原型不存在' });
   const part = await request.file();
   if (!part) return reply.code(400).send({ error: '请选择 HTML 或 ZIP 文件' });
-  const buffer = await part.toBuffer();
-  if (buffer.byteLength > config.UPLOAD_MAX_BYTES) return reply.code(413).send({ error: '文件超过 100MB 限制' });
+  let buffer: Buffer;
+  try { buffer = await part.toBuffer(); }
+  catch { return reply.code(413).send({ error: '文件超过 100MB 限制' }); }
+  if (part.file.truncated || buffer.byteLength > config.UPLOAD_MAX_BYTES) return reply.code(413).send({ error: '文件超过 100MB 限制' });
   let extension: string;
   let entryPath: string;
   let sourceFileName: string;
+  let metadata;
   try {
     extension = validateUpload(part.filename, buffer);
     entryPath = normalizePreviewPath(multipartValue(part.fields.entryPath) || 'index.html');
     sourceFileName = sanitizeSourceFileName(part.filename);
+    metadata = versionUploadMetadataSchema.parse({
+      note: multipartValue(part.fields.note), changeContent: multipartValue(part.fields.changeContent),
+      baseVersionId: 'baseVersionId' in part.fields ? multipartValue(part.fields.baseVersionId).trim() || null : undefined
+    });
   } catch (error) {
     return reply.code(400).send({ error: error instanceof Error ? error.message : '上传内容无效' });
   }
@@ -285,13 +296,15 @@ app.post('/api/v1/assets/:assetId/versions', async (request: AuthRequest, reply)
   const previewPrefix = `previews/${asset.projectId}/${assetId}/${versionId}`;
   await putObject(sourceKey, buffer, part.mimetype || 'application/octet-stream');
   try {
-    const version = await prisma.$transaction(async tx => {
-      const versionNo = ((await tx.prototypeVersion.aggregate({ _max: { versionNo: true }, where: { assetId } }))._max.versionNo ?? 0) + 1;
-      return tx.prototypeVersion.create({ data: { id: versionId, assetId, versionNo, sourceFileName, sourceKey, previewPrefix, note: multipartValue(part.fields.note).slice(0, 2000), changeContent: sanitizeChangeContent(multipartValue(part.fields.changeContent)), entryPath, sizeBytes: buffer.byteLength, status: VersionStatus.PROCESSING } });
-    }, { isolationLevel: 'Serializable' });
+    const version = await createPrototypeVersion({
+      id: versionId, assetId, sourceFileName, sourceKey, previewPrefix,
+      note: metadata.note, changeContent: sanitizeChangeContent(metadata.changeContent),
+      baseVersionId: metadata.baseVersionId, entryPath, sizeBytes: buffer.byteLength, checksum: sha256(buffer)
+    });
     return reply.code(202).send(jsonVersion(version));
   } catch (error) {
     await deleteObject(sourceKey).catch(() => undefined);
+    if (error instanceof InvalidBaselineError || (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003')) return reply.code(409).send({ error: error instanceof InvalidBaselineError ? error.message : '比较基线已变化，请重新选择' });
     throw error;
   }
 });
@@ -351,42 +364,13 @@ app.get('/api/v1/versions/:versionId/preview-token', async (request: AuthRequest
   return { token, entryPath: version.entryPath, url: `${config.PREVIEW_ORIGIN}/preview/${versionId}/${token}/${version.entryPath}` };
 });
 
-app.get('/api/v1/search', async (request: AuthRequest) => {
-  type SearchQuery = { q?: string; projectId?: string; status?: VersionStatus; tag?: string; createdFrom?: string; createdTo?: string };
-  const query = request.query as SearchQuery;
-  const q = String(query.q || '').trim();
-  const projectId = query.projectId;
-  const status = query.status;
-  const tag = String(query.tag || '').trim();
-  const createdFrom = query.createdFrom ? new Date(query.createdFrom) : undefined;
-  const createdTo = query.createdTo ? new Date(query.createdTo) : undefined;
-  const where: Prisma.PrototypeAssetWhereInput = {
-    project: { ownerId: request.userId },
-    ...(projectId ? { projectId } : {}),
-    ...(tag ? { tags: { some: { tag: { name: { equals: tag, mode: 'insensitive' } } } } } : {}),
-    ...((createdFrom && !Number.isNaN(createdFrom.valueOf())) || (createdTo && !Number.isNaN(createdTo.valueOf())) ? {
-      createdAt: {
-        ...(createdFrom && !Number.isNaN(createdFrom.valueOf()) ? { gte: createdFrom } : {}),
-        ...(createdTo && !Number.isNaN(createdTo.valueOf()) ? { lte: createdTo } : {})
-      }
-    } : {}),
-    ...(q ? { OR: [
-      { name: { contains: q, mode: 'insensitive' } },
-      { description: { contains: q, mode: 'insensitive' } },
-      { project: { name: { contains: q, mode: 'insensitive' } } },
-      { tags: { some: { tag: { name: { contains: q, mode: 'insensitive' } } } } },
-      { versions: { some: { OR: [
-        { extractedText: { contains: q, mode: 'insensitive' } },
-        { note: { contains: q, mode: 'insensitive' } },
-        { changeContent: { contains: q, mode: 'insensitive' } },
-        { sourceFileName: { contains: q, mode: 'insensitive' } },
-        { entryPath: { contains: q, mode: 'insensitive' } }
-      ] } } }
-    ] } : {}),
-    ...(status && Object.values(VersionStatus).includes(status) ? { versions: { some: { status } } } : {})
-  };
-  const rows = await prisma.prototypeAsset.findMany({ where, include: { project: { select: { id: true, name: true } }, tags: { include: { tag: true } }, versions: { orderBy: { versionNo: 'desc' }, take: 1, select: { id: true, versionNo: true, status: true, sourceFileName: true, createdAt: true } } }, orderBy: { updatedAt: 'desc' }, take: 100 });
-  return rows.map(jsonIconAsset);
+app.get('/api/v1/search', async (request: AuthRequest) => searchPrototypes(request.query as Parameters<typeof searchPrototypes>[0], request.userId!));
+
+app.get('/api/v1/versions/:versionId/download', async (request: AuthRequest, reply) => {
+  const { versionId } = request.params as { versionId: string };
+  const version = await prisma.prototypeVersion.findFirst({ where: { id: versionId, asset: { project: { ownerId: request.userId } } } });
+  if (!version) return reply.code(404).send({ error: '版本不存在' });
+  return sendOriginalDownload(reply, version.sourceKey, originalVersionFileName(version));
 });
 
 app.get('/preview/:versionId/:token/*', async (request, reply) => {
@@ -412,9 +396,11 @@ app.get('/preview/:versionId/:token/*', async (request, reply) => {
     .send(Buffer.from(body));
 });
 
-await init();
-await app.listen({ port: config.API_PORT, host: '0.0.0.0' });
-
-const shutdown = async () => { await app.close(); await prisma.$disconnect(); process.exit(0); };
-process.once('SIGINT', shutdown);
-process.once('SIGTERM', shutdown);
+// Importing the app allows API integration tests without opening a listening port.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  await init();
+  await app.listen({ port: config.API_PORT, host: '0.0.0.0' });
+  const shutdown = async () => { await app.close(); await prisma.$disconnect(); process.exit(0); };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}

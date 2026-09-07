@@ -83,8 +83,8 @@ export default function ProjectPage() {
           </div>
           <div className="asset-quick-actions" aria-label={`${asset.name}快捷操作`}>
             {asset.releaseVersionId
-              ? <Link className="button secondary small" href={`/viewer/${asset.releaseVersionId}`} target="_blank" rel="noopener noreferrer">查看发布版 ↗</Link>
-              : <button className="button secondary small" disabled title="请先在版本时间线中设置发布版">尚未发布</button>}
+              ? <Link className="button secondary small" href={`/viewer/${asset.releaseVersionId}`} target="_blank" rel="noopener noreferrer">查看发布原型 ↗</Link>
+              : <button className="button secondary small" disabled title="请先在版本时间线中设置发布原型">尚未发布</button>}
             <Link className="button ghost small" href={`/assets/${asset.id}`}>管理资产 →</Link>
           </div>
         </article>)}

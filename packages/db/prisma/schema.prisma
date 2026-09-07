@@ -76,6 +76,7 @@ model PrototypeAsset {
   iconKey          String?           @map("icon_key")
   previewVersionId String?           @unique @map("preview_version_id")
   releaseVersionId String?           @unique @map("release_version_id")
+  lastVersionNo    Int               @default(0) @map("last_version_no")
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
   project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -91,6 +92,9 @@ model PrototypeVersion {
   id            String        @id @default(cuid())
   assetId       String        @map("asset_id")
   versionNo     Int           @map("version_no")
+  baseVersionId String?       @map("base_version_id")
+  baseVersionNo Int?          @map("base_version_no")
+  baselineRecorded Boolean   @default(false) @map("baseline_recorded")
   status        VersionStatus  @default(PROCESSING)
   entryPath     String        @default("index.html") @map("entry_path")
   sourceFileName String?      @map("source_file_name")
@@ -109,8 +113,11 @@ model PrototypeVersion {
   previewFor    PrototypeAsset? @relation("previewVersion")
   releaseFor    PrototypeAsset? @relation("releaseVersion")
   materials     VersionMaterial[]
+  baseVersion   PrototypeVersion?  @relation("versionBaseline", fields: [baseVersionId], references: [id], onDelete: SetNull)
+  derivedVersions PrototypeVersion[] @relation("versionBaseline")
   @@unique([assetId, versionNo])
   @@index([status, createdAt])
+  @@index([baseVersionId])
 }
 
 model VersionMaterial {

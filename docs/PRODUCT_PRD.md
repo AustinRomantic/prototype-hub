@@ -1,5 +1,7 @@
 # Prototype Hub 产品规划与 PRD
 
+> 状态更新（2026-09-07）：本文现状与风险章节保留初始评估基线，不代表后续代码仍未实现。当前排期见 [已确认的八期计划](DEVELOPMENT_PLAN.md)，第一期实现与验证见 [交付说明](PHASE1_DELIVERY.md)；会话职责与文档使用规则见 [文档入口](README.md)。
+
 文档版本：1.0 · 日期：2026-09-07 · 状态：建议评审稿  
 评估基线：当前仓库提交 `e791735` 及工作区源码。本文描述的新增能力均为规划，不代表已经实现。  
 配套文件：[迭代路线与需求清单](/Users/davidduan/Desktop/backend/prototype-hub/docs/PRODUCT_ROADMAP.md)

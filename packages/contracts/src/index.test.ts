@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assetInputSchema, materialMetadataInputSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from './index.js';
+import { versionBaselineLabel, versionUploadMetadataSchema, versionStatusLabel, assetInputSchema, materialMetadataInputSchema, openApiDocument, projectInputSchema, versionMetadataInputSchema } from './index.js';
 
 describe('shared contracts', () => {
   it('normalizes optional project fields', () => expect(projectInputSchema.parse({ name: '商城' }).description).toBe(''));
@@ -19,5 +19,24 @@ describe('shared contracts', () => {
     expect(materialMetadataInputSchema.safeParse({ category: 'BACKEND', tags: ['API'] }).success).toBe(true);
     expect(materialMetadataInputSchema.safeParse({}).success).toBe(false);
     expect(materialMetadataInputSchema.safeParse({ tags: Array(11).fill('tag') }).success).toBe(false);
+  });
+});
+
+
+describe('version provenance and status', () => {
+  it('distinguishes omitted automatic baseline from deliberately absent baseline', () => {
+    expect(versionUploadMetadataSchema.parse({}).baseVersionId).toBeUndefined();
+    expect(versionUploadMetadataSchema.parse({ baseVersionId: null }).baseVersionId).toBeNull();
+    expect(versionUploadMetadataSchema.safeParse({ baseVersionId: '' }).success).toBe(false);
+  });
+  it('does not infer a baseline for legacy records and preserves deleted provenance', () => {
+    expect(versionBaselineLabel({ baselineRecorded: false, baseVersionId: null, baseVersionNo: null })).toBe('比较基线：未记录');
+    expect(versionBaselineLabel({ baselineRecorded: true, baseVersionId: null, baseVersionNo: null })).toBe('比较基线：无');
+    expect(versionBaselineLabel({ baselineRecorded: true, baseVersionId: 'v2', baseVersionNo: 2 })).toBe('比较基线：v2');
+    expect(versionBaselineLabel({ baselineRecorded: true, baseVersionId: null, baseVersionNo: 2 })).toBe('比较基线：v2（原版本已删除）');
+  });
+  it('distinguishes saved originals from preview failures', () => {
+    expect(versionStatusLabel('FAILED')).toBe('原件已保存 · 预览失败');
+    expect(versionStatusLabel('PROCESSING')).toBe('原件已保存 · 预览处理中');
   });
 });

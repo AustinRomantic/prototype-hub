@@ -1,11 +1,13 @@
 'use client';
 
-import { type ChangeEvent, type FormEvent, useEffect, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { versionStatusLabel, type VersionBaseline } from '@prototype-hub/contracts';
+import { VersionBaselineInfo } from '../../components/version-baseline';
 import { RichTextEditor } from '../../components/rich-text-editor';
 
-type Version = {
+type Version = VersionBaseline & {
   id: string;
   versionNo: number;
   status: string;
@@ -44,6 +46,8 @@ export default function AssetPage() {
   const [note, setNote] = useState('');
   const [changeContent, setChangeContent] = useState('');
   const [entryPath, setEntryPath] = useState('index.html');
+  const [baseVersionId, setBaseVersionId] = useState('auto');
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -96,26 +100,27 @@ export default function AssetPage() {
 
   const upload = async (event: FormEvent) => {
     event.preventDefault();
-    if (!file) return;
+    if (!file || uploading) return;
     setUploading(true);
-    setMessage('正在上传并排队处理…');
+    setMessage('正在上传原文件…');
     const body = new FormData();
     body.append('note', note);
     body.append('changeContent', changeContent);
     body.append('entryPath', entryPath);
+    if (baseVersionId !== 'auto') body.append('baseVersionId', baseVersionId === 'none' ? '' : baseVersionId);
     body.append('file', file);
-    const response = await fetch(`/api/v1/assets/${id}/versions`, { method: 'POST', body, credentials: 'include' });
-    setUploading(false);
-    if (!response.ok) {
-      setMessage((await response.json()).error || '上传失败');
-      return;
-    }
-    setFile(null);
-    setNote('');
-    setChangeContent('');
-    setEntryPath('index.html');
-    setMessage(`“${file.name}”上传成功，Worker 正在处理版本。`);
-    load();
+    try {
+      const response = await fetch(`/api/v1/assets/${id}/versions`, { method: 'POST', body, credentials: 'include' });
+      if (response.status === 401) { window.location.href = '/login'; return; }
+      const result = await response.json();
+      if (!response.ok) { setMessage(`上传失败：${result.error || '原件未能保存，请重试'}`); return; }
+      setFile(null); setNote(''); setChangeContent(''); setEntryPath('index.html'); setBaseVersionId('auto');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setMessage(`“${file.name}”原件已保存为 v${result.versionNo}，正在生成预览。`);
+      await load();
+    } catch {
+      setMessage('未能确认上传结果，请刷新版本列表检查是否已保存，再决定是否重新上传。');
+    } finally { setUploading(false); }
   };
 
   const preview = (versionId: string) => window.open(`/viewer/${versionId}`, '_blank', 'noopener,noreferrer');
@@ -264,8 +269,8 @@ export default function AssetPage() {
         </div>
         <div className="hero-actions">
           {asset.releaseVersionId
-            ? <button className="button secondary" onClick={() => preview(asset.releaseVersionId!)}>查看发布版 ↗</button>
-            : <button className="button secondary" disabled title="请先在版本时间线中设置发布版">尚未设置发布版</button>}
+            ? <button className="button secondary" onClick={() => preview(asset.releaseVersionId!)}>查看发布原型 ↗</button>
+            : <button className="button secondary" disabled title="请先在版本时间线中设置发布原型">尚未设置发布原型</button>}
           <button className="button secondary" onClick={openEdit}>编辑资产</button>
           <button className="button danger ghost-danger" onClick={() => { setDeleteError(''); setDeleteOpen(true); }}>删除</button>
         </div>
@@ -277,13 +282,20 @@ export default function AssetPage() {
         <form onSubmit={upload}>
           <div className="upload-fields">
             <label className="field upload-file-field">原型文件
-              <input type="file" accept=".html,.htm,.zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setFile(event.target.files?.[0] || null)} />
+              <input ref={fileInputRef} disabled={uploading} type="file" accept=".html,.htm,.zip" onChange={(event: ChangeEvent<HTMLInputElement>) => setFile(event.target.files?.[0] || null)} />
             </label>
             <label className="field upload-entry-field">入口文件<input value={entryPath} onChange={event => setEntryPath(event.target.value)} placeholder="index.html" /></label>
             <label className="field upload-note-field">上传备注<input value={note} onChange={event => setNote(event.target.value)} placeholder="例如：补充支付流程" /></label>
-            <button className="button primary" disabled={uploading || !file}>{uploading ? '处理中…' : '上传版本'}</button>
+            <button className="button primary" disabled={uploading || !file}>{uploading ? '上传中…' : '上传版本'}</button>
           </div>
-          <label className="field change-content-field">版本变更内容 <span className="optional-label">选填 · 说明相较上一版本的变化</span>
+          <label className="field">比较基线
+            <select value={baseVersionId} disabled={uploading} onChange={event => setBaseVersionId(event.target.value)}>
+              <option value="auto">{asset.versions.find(version => version.status === 'READY') ? `自动选择最近成功版本（当前 v${asset.versions.find(version => version.status === 'READY')!.versionNo}）` : '自动选择（当前无成功版本）'}</option>
+              <option value="none">无比较基线</option>
+              {asset.versions.filter(version => version.status === 'READY').map(version => <option key={version.id} value={version.id}>v{version.versionNo} · {version.sourceFileName || '历史上传'}</option>)}
+            </select>
+          </label>
+          <label className="field change-content-field">版本变更内容 <span className="optional-label">选填 · 说明相较所选基线的变化</span>
             <RichTextEditor value={changeContent} onChange={setChangeContent} placeholder="例如：新增支付结果页；优化订单筛选交互；修复移动端按钮遮挡。" />
           </label>
         </form>
@@ -293,14 +305,14 @@ export default function AssetPage() {
       <div className="section-heading timeline-heading">
         <div><h2>版本时间线</h2><span className="subtle">共 {asset.versions.length} 个版本，当前显示 {visibleVersions.length} 个</span></div>
         <div className="timeline-controls">
-          <label>状态<select className="compact-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)}><option value="ALL">全部</option><option value="READY">可用</option><option value="PROCESSING">处理中</option><option value="FAILED">失败</option></select></label>
+          <label>状态<select className="compact-select" value={statusFilter} onChange={event => setStatusFilter(event.target.value as typeof statusFilter)}><option value="ALL">全部</option><option value="READY">可预览</option><option value="PROCESSING">预览处理中</option><option value="FAILED">预览失败</option></select></label>
           <label>排序<select className="compact-select" value={sortOrder} onChange={event => setSortOrder(event.target.value as typeof sortOrder)}><option value="newest">最新在前</option><option value="oldest">最早在前</option></select></label>
         </div>
       </div>
       <div className="version-guide">
         <div className="version-guide-item"><span className="version-guide-label preview">预览版</span><div><strong>内部验收候选</strong><p>团队正在评审或测试的默认版本，可以频繁切换，不影响对外稳定入口。</p></div></div>
-        <div className="version-guide-item"><span className="version-guide-label release">发布版</span><div><strong>已确认的稳定版本</strong><p>项目页“查看发布版”会打开它，适合提供给产品、研发或其他协作者长期查看。</p></div></div>
-        <p className="version-guide-footnote">“打开此版本”只临时查看这一条记录，不会改变预览版或发布版。</p>
+        <div className="version-guide-item"><span className="version-guide-label release">发布原型</span><div><strong>当前发布原型</strong><p>项目页“查看发布原型”会打开它，其配套材料仍为可继续整理的工作资料，尚未固定为发布快照。</p></div></div>
+        <p className="version-guide-footnote">“打开此版本”只临时查看这一条记录，不会改变预览版或发布原型。</p>
       </div>
       <div className="timeline">
         {visibleVersions.length ? visibleVersions.map(version => <div id={`version-${version.id}`} className="version-row clickable-version-row" key={version.id} onClick={() => router.push(`/versions/${version.id}`)}>
@@ -308,9 +320,10 @@ export default function AssetPage() {
             <div className="version-number">v{version.versionNo}</div>
             <div className="version-content">
               <div className="version-heading">
-                <span className={`status ${version.status}`}>{version.status}</span>
+                <span className={`status ${version.status}`}>{versionStatusLabel(version.status)}</span>
                 <strong className={`source-file-name${version.sourceFileName ? '' : ' missing'}`} title={version.sourceFileName || '该版本创建时尚未记录原文件名'}>{version.sourceFileName || '历史上传（未记录原名）'}</strong>
               </div>
+              <div className="subtle"><VersionBaselineInfo version={version} /></div>
               {version.note && <div className="version-note"><span>上传备注</span>{version.note}</div>}
               <div className="subtle">{new Date(version.createdAt).toLocaleString('zh-CN')} · {version.fileCount || 0} 个文件 · {Math.round((version.sizeBytes || 0) / 1024)} KB</div>
               {version.errorMessage && <div className="error">{version.errorMessage}</div>}
@@ -318,12 +331,13 @@ export default function AssetPage() {
           </div>
           <div className="version-actions" onClick={event => event.stopPropagation()}>
             {asset.previewVersionId === version.id && <span className="pill">预览版</span>}
-            {asset.releaseVersionId === version.id && <span className="pill">发布版</span>}
+            {asset.releaseVersionId === version.id && <span className="pill">发布原型</span>}
             {version.status === 'READY' && <>
               <button className="button secondary small" onClick={() => preview(version.id)}>打开此版本</button>
               <button className="button ghost small" disabled={asset.previewVersionId === version.id} onClick={() => mark(version.id, 'preview')}>设为预览版</button>
-              <button className="button ghost small" disabled={asset.releaseVersionId === version.id} onClick={() => mark(version.id, 'release')}>设为发布版</button>
+              <button className="button ghost small" disabled={asset.releaseVersionId === version.id} onClick={() => mark(version.id, 'release')}>设为发布原型</button>
             </>}
+            <a className="button ghost small" href={`/api/v1/versions/${version.id}/download`}>下载原件</a>
             <button className="button ghost small" onClick={() => setDrawerVersion(version)}>查看变更</button>
             <button className="button ghost small manage-button" onClick={() => openVersionManager(version)}>管理</button>
           </div>
@@ -360,11 +374,11 @@ export default function AssetPage() {
     {managedVersion && <div className="modal-backdrop">
       <form className="modal" onSubmit={saveVersion}>
         <h2>管理 v{managedVersion.versionNo}</h2>
-        <div className="version-manage-summary"><strong>{managedVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span className={`status ${managedVersion.status}`}>{managedVersion.status}</span></div>
+        <div className="version-manage-summary"><strong>{managedVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span className={`status ${managedVersion.status}`}>{versionStatusLabel(managedVersion.status)}</span></div>
         <p className="immutable-note">版本文件、版本号和入口路径保持不可变，以确保历史可追溯；管理备注和版本变更说明可以修订。</p>
         <label className="field">版本备注<textarea autoFocus maxLength={2000} value={versionNote} onChange={event => setVersionNote(event.target.value)} placeholder="例如：产品确认版，修复支付流程" /></label>
-        <label className="field">版本变更内容 <span className="optional-label">选填 · 相较上一版本</span><RichTextEditor value={versionChangeContent} onChange={setVersionChangeContent} placeholder="填写新增、优化和修复内容" /></label>
-        {managedVersionReferenced && <p className="form-hint">该版本当前被设为{asset.previewVersionId === managedVersion.id && asset.releaseVersionId === managedVersion.id ? '预览版和发布版' : asset.previewVersionId === managedVersion.id ? '预览版' : '发布版'}，需要先切换指针后才能删除。</p>}
+        <label className="field">版本变更内容 <span className="optional-label">选填 · 相较记录的比较基线</span><RichTextEditor value={versionChangeContent} onChange={setVersionChangeContent} placeholder="填写新增、优化和修复内容" /></label>
+        {managedVersionReferenced && <p className="form-hint">该版本当前被设为{asset.previewVersionId === managedVersion.id && asset.releaseVersionId === managedVersion.id ? '预览版和发布原型' : asset.previewVersionId === managedVersion.id ? '预览版' : '发布原型'}，需要先切换指针后才能删除。</p>}
         {versionError && <p className="error">{versionError}</p>}
         <div className="modal-actions split-actions"><button type="button" className="button ghost-danger" disabled={savingVersion || managedVersionReferenced} onClick={() => setDeleteVersionOpen(true)}>删除版本</button><span className="action-spacer" /><button type="button" className="button ghost" disabled={savingVersion} onClick={() => setManagedVersion(null)}>取消</button><button className="button primary" disabled={savingVersion}>{savingVersion ? '保存中…' : '保存版本信息'}</button></div>
       </form>
@@ -380,13 +394,13 @@ export default function AssetPage() {
 
     {drawerVersion && <div className="drawer-backdrop" onClick={() => setDrawerVersion(null)}>
       <aside className="change-drawer" role="dialog" aria-modal="true" aria-labelledby="change-drawer-title" onClick={event => event.stopPropagation()}>
-        <div className="drawer-head"><div><span className="eyebrow">Version changes</span><h2 id="change-drawer-title">v{drawerVersion.versionNo} 版本变更</h2><p>{drawerVersion.versionNo > 1 ? `上传时相较于 v${drawerVersion.versionNo - 1}` : '首个版本，无上一版本可比较'}</p></div><button className="drawer-close" aria-label="关闭版本变更" onClick={() => setDrawerVersion(null)}>×</button></div>
-        <div className="drawer-meta"><span className={`status ${drawerVersion.status}`}>{drawerVersion.status}</span><strong>{drawerVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span>{new Date(drawerVersion.createdAt).toLocaleString('zh-CN')}</span></div>
+        <div className="drawer-head"><div><span className="eyebrow">Version changes</span><h2 id="change-drawer-title">v{drawerVersion.versionNo} 版本变更</h2><p><VersionBaselineInfo version={drawerVersion} /></p></div><button className="drawer-close" aria-label="关闭版本变更" onClick={() => setDrawerVersion(null)}>×</button></div>
+        <div className="drawer-meta"><span className={`status ${drawerVersion.status}`}>{versionStatusLabel(drawerVersion.status)}</span><strong>{drawerVersion.sourceFileName || '历史上传（未记录原名）'}</strong><span>{new Date(drawerVersion.createdAt).toLocaleString('zh-CN')}</span></div>
         {drawerVersion.note && <div className="drawer-note"><span>上传备注</span><p>{drawerVersion.note}</p></div>}
         <div className="drawer-section-title">变更内容</div>
         {drawerVersion.changeContent
           ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: drawerVersion.changeContent }} />
-          : <div className="drawer-empty"><strong>未填写版本变更</strong><p>该版本上传时没有记录相较上一版本的变更内容，可通过“管理”补充。</p></div>}
+          : <div className="drawer-empty"><strong>未填写版本变更</strong><p>该版本上传时没有记录相较比较基线的变更内容，可通过“管理”补充。</p></div>}
       </aside>
     </div>}
   </div>;

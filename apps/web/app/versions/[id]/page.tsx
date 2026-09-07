@@ -3,6 +3,8 @@
 import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { versionStatusLabel, type VersionBaseline } from '@prototype-hub/contracts';
+import { VersionBaselineInfo } from '../../components/version-baseline';
 import { RichTextEditor } from '../../components/rich-text-editor';
 
 type Category = 'PRODUCT' | 'DATA' | 'BACKEND' | 'FRONTEND' | 'TEST' | 'DESIGN' | 'OTHER';
@@ -24,7 +26,7 @@ type Material = {
   previewUrl: string;
   downloadUrl: string;
 };
-type Workspace = {
+type Workspace = VersionBaseline & {
   id: string;
   versionNo: number;
   status: string;
@@ -52,7 +54,7 @@ const CATEGORIES: Array<{ value: Category; label: string }> = [
 const ACCEPTED = '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.md,.txt';
 
 const categoryLabel = (category: Category) => CATEGORIES.find(item => item.value === category)?.label || '其他';
-const statusLabel = (status: Material['status']) => status === 'READY' ? '可预览' : status === 'PROCESSING' ? '处理中' : '处理失败';
+const statusLabel = versionStatusLabel;
 const formatBytes = (bytes: number) => bytes === 0 ? '0 B' : bytes < 1024 ? `${bytes} B` : bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
 const fileIcon = (extension: string) => extension === '.pdf' ? 'PDF' : ['.doc', '.docx'].includes(extension) ? 'W' : ['.xls', '.xlsx'].includes(extension) ? 'X' : ['.ppt', '.pptx'].includes(extension) ? 'P' : ['.png', '.jpg', '.jpeg', '.webp'].includes(extension) ? '图' : extension === '.md' ? 'M' : 'T';
 
@@ -129,13 +131,16 @@ export default function VersionWorkspacePage() {
   };
 
   const uploadAll = async () => {
-    if (!uploadItems.length) return;
+    if (!uploadItems.length || uploading) return;
     setUploading(true);
     let cursor = 0;
+    let succeeded = 0;
+    let failed = 0;
     const runNext = async () => {
       while (cursor < uploadItems.length) {
         const index = cursor++;
         const item = uploadItems[index]!;
+        if (item.state === 'SUCCESS') continue;
         setUploadItems(current => current.map((value, itemIndex) => itemIndex === index ? { ...value, state: 'UPLOADING', error: undefined } : value));
         const body = new FormData();
         body.append('category', uploadCategory);
@@ -144,15 +149,17 @@ export default function VersionWorkspacePage() {
         try {
           const response = await fetch(`/api/v1/versions/${id}/materials`, { method: 'POST', body, credentials: 'include' });
           if (!response.ok) throw new Error((await response.json()).error || '上传失败');
+          succeeded += 1;
           setUploadItems(current => current.map((value, itemIndex) => itemIndex === index ? { ...value, state: 'SUCCESS' } : value));
         } catch (error) {
+          failed += 1;
           setUploadItems(current => current.map((value, itemIndex) => itemIndex === index ? { ...value, state: 'FAILED', error: error instanceof Error ? error.message : '上传失败' } : value));
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, uploadItems.length) }, runNext));
     setUploading(false);
-    setMessage('材料上传队列已完成，Office、PDF 和 Markdown 正在生成预览。');
+    setMessage(`本次 ${succeeded} 个原件已保存，${failed} 个上传失败。已保存项不会重复上传，预览状态见材料列表。`);
     await Promise.all([loadWorkspace(), loadMaterials()]);
   };
 
@@ -230,10 +237,12 @@ export default function VersionWorkspacePage() {
       <div className="crumbs"><Link href={`/projects/${workspace.asset.project.id}`}>{workspace.asset.project.name}</Link>　/　<Link href={`/assets/${workspace.asset.id}`}>{workspace.asset.name}</Link>　/　v{workspace.versionNo}</div>
       <section className="workspace-hero">
         <div className="workspace-version-badge">v{workspace.versionNo}</div>
-        <div className="workspace-hero-copy"><div className="eyebrow">Version workspace</div><h1>{workspace.asset.name} · v{workspace.versionNo}</h1><p className="subtle">{workspace.sourceFileName || '历史上传（未记录原名）'} · {new Date(workspace.createdAt).toLocaleString('zh-CN')}</p><div className="pills"><span className={`status ${workspace.status}`}>{workspace.status}</span>{workspace.asset.previewVersionId === id && <span className="pill">预览版</span>}{workspace.asset.releaseVersionId === id && <span className="pill">发布版</span>}</div></div>
-        <div className="hero-actions"><button className="button secondary" onClick={() => window.open(`/viewer/${id}`, '_blank', 'noopener,noreferrer')}>打开原型 ↗</button><button className="button secondary" onClick={() => setChangeOpen(true)}>查看版本变更</button><button className="button secondary" onClick={openVersionManager}>管理版本</button></div>
+        <div className="workspace-hero-copy"><div className="eyebrow">Version workspace</div><h1>{workspace.asset.name} · v{workspace.versionNo}</h1><p className="subtle">{workspace.sourceFileName || '历史上传（未记录原名）'} · {new Date(workspace.createdAt).toLocaleString('zh-CN')}</p><div className="pills"><span className={`status ${workspace.status}`}>{versionStatusLabel(workspace.status)}</span>{workspace.asset.previewVersionId === id && <span className="pill">预览版</span>}{workspace.asset.releaseVersionId === id && <span className="pill">发布原型</span>}</div></div>
+        <div className="hero-actions"><a className="button secondary" href={`/api/v1/versions/${id}/download`}>下载原型原件</a><button className="button secondary" disabled={workspace.status !== 'READY'} onClick={() => window.open(`/viewer/${id}`, '_blank', 'noopener,noreferrer')}>打开原型 ↗</button><button className="button secondary" onClick={() => setChangeOpen(true)}>查看版本变更</button><button className="button secondary" onClick={openVersionManager}>管理版本</button></div>
       </section>
 
+      <p className="subtle"><VersionBaselineInfo version={workspace} /></p>
+      <p className="form-hint">材料为可继续整理的工作资料；设置当前发布原型不会固定这些材料。</p>
       <section className="workspace-summary-grid">
         <div className="workspace-summary-card"><span>活动材料</span><strong>{workspace.stats.activeCount}</strong></div>
         <div className="workspace-summary-card"><span>回收站</span><strong>{workspace.stats.trashCount}</strong></div>
@@ -242,13 +251,13 @@ export default function VersionWorkspacePage() {
       </section>
 
       {!trash && <section className="card material-upload-card">
-        <div className="section-heading"><div><h2>新增迭代材料</h2><p className="subtle">支持 PDF、Office、图片、Markdown 和 TXT；单文件最大 100MB，可批量选择。</p></div><button className="button primary" disabled={!uploadItems.length || uploading} onClick={uploadAll}>{uploading ? '上传中…' : uploadItems.length ? `上传 ${uploadItems.length} 个材料` : '上传材料'}</button></div>
+        <div className="section-heading"><div><h2>新增迭代材料</h2><p className="subtle">支持 PDF、Office、图片、Markdown 和 TXT；单文件最大 100MB，可批量选择。</p></div><button className="button primary" disabled={!uploadItems.some(item => item.state !== 'SUCCESS') || uploading} onClick={uploadAll}>{uploading ? '上传中…' : uploadItems.length ? `上传 ${uploadItems.filter(item => item.state !== 'SUCCESS').length} 个材料` : '上传材料'}</button></div>
         <div className="material-upload-controls">
-          <label className="field">选择文件<input ref={fileInputRef} type="file" multiple accept={ACCEPTED} onChange={chooseFiles} /></label>
+          <label className="field">选择文件<input ref={fileInputRef} disabled={uploading} type="file" multiple accept={ACCEPTED} onChange={chooseFiles} /></label>
           <label className="field">统一分类<select value={uploadCategory} onChange={event => setUploadCategory(event.target.value as Category)}>{CATEGORIES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
           <label className="field">统一标签<input value={uploadTags} onChange={event => setUploadTags(event.target.value)} placeholder="接口, 评审（逗号分隔）" /></label>
         </div>
-        {uploadItems.length > 0 && <div className="upload-queue">{uploadItems.map(item => <div className={`upload-queue-item ${item.state}`} key={item.key}><span className="file-type-mini">{fileIcon(item.file.name.slice(item.file.name.lastIndexOf('.')).toLowerCase())}</span><strong>{item.file.name}</strong><span>{formatBytes(item.file.size)}</span><span className="queue-state">{item.state === 'WAITING' ? '等待上传' : item.state === 'UPLOADING' ? '上传中…' : item.state === 'SUCCESS' ? '已提交处理' : item.error || '上传失败'}</span></div>)}</div>}
+        {uploadItems.length > 0 && <div className="upload-queue">{uploadItems.map(item => <div className={`upload-queue-item ${item.state}`} key={item.key}><span className="file-type-mini">{fileIcon(item.file.name.slice(item.file.name.lastIndexOf('.')).toLowerCase())}</span><strong>{item.file.name}</strong><span>{formatBytes(item.file.size)}</span><span className="queue-state">{item.state === 'WAITING' ? '等待上传' : item.state === 'UPLOADING' ? '上传中…' : item.state === 'SUCCESS' ? '原件已保存' : item.error || '上传失败'}</span></div>)}</div>}
       </section>}
 
       <section className="materials-section">
@@ -263,12 +272,12 @@ export default function VersionWorkspacePage() {
       </section>
     </main>
 
-    {selectedMaterial && <div className="drawer-backdrop" onClick={() => setSelectedMaterial(null)}><aside className="change-drawer material-preview-drawer" role="dialog" aria-modal="true" aria-labelledby="material-preview-title" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Iteration material</span><h2 id="material-preview-title">{selectedMaterial.displayName}</h2><p>{categoryLabel(selectedMaterial.category)} · {formatBytes(selectedMaterial.sizeBytes)}</p></div><button className="drawer-close" aria-label="关闭材料预览" onClick={() => setSelectedMaterial(null)}>×</button></div><div className="material-drawer-actions"><a className="button secondary small" href={selectedMaterial.downloadUrl}>下载原文件</a>{!selectedMaterial.deletedAt && <button className="button ghost small" onClick={() => openEditMaterial(selectedMaterial)}>管理</button>}{!selectedMaterial.deletedAt && <button className="button ghost-danger small" onClick={() => moveToTrash(selectedMaterial)}>移入回收站</button>}{selectedMaterial.deletedAt && <button className="button ghost small" onClick={() => restore(selectedMaterial)}>恢复</button>}</div><div className="material-preview-stage">{selectedMaterial.status === 'READY' ? selectedMaterial.previewKind === 'IMAGE' ? <img src={selectedMaterial.previewUrl} alt={selectedMaterial.displayName} /> : <iframe src={selectedMaterial.previewUrl} title={`${selectedMaterial.displayName} 预览`} /> : selectedMaterial.status === 'PROCESSING' ? <div className="drawer-empty"><strong>正在生成预览</strong><p>文档已经安全保存，Worker 正在处理。</p></div> : <div className="drawer-empty"><strong>预览生成失败</strong><p>{selectedMaterial.errorMessage || '可以下载原文件或重新生成预览。'}</p>{!selectedMaterial.deletedAt && <button className="button secondary small" onClick={() => retry(selectedMaterial)}>重新生成预览</button>}</div>}</div></aside></div>}
+    {selectedMaterial && <div className="drawer-backdrop" onClick={() => setSelectedMaterial(null)}><aside className="change-drawer material-preview-drawer" role="dialog" aria-modal="true" aria-labelledby="material-preview-title" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Iteration material</span><h2 id="material-preview-title">{selectedMaterial.displayName}</h2><p>{categoryLabel(selectedMaterial.category)} · {formatBytes(selectedMaterial.sizeBytes)}</p></div><button className="drawer-close" aria-label="关闭材料预览" onClick={() => setSelectedMaterial(null)}>×</button></div><div className="material-drawer-actions"><a className="button secondary small" href={selectedMaterial.downloadUrl}>下载原文件</a>{!selectedMaterial.deletedAt && <button className="button ghost small" onClick={() => openEditMaterial(selectedMaterial)}>管理</button>}{!selectedMaterial.deletedAt && <button className="button ghost-danger small" onClick={() => moveToTrash(selectedMaterial)}>移入回收站</button>}{selectedMaterial.deletedAt && <button className="button ghost small" onClick={() => restore(selectedMaterial)}>恢复</button>}</div><div className="material-preview-stage">{selectedMaterial.status === 'READY' ? selectedMaterial.previewKind === 'IMAGE' ? <img src={selectedMaterial.previewUrl} alt={selectedMaterial.displayName} /> : <iframe src={selectedMaterial.previewUrl} title={`${selectedMaterial.displayName} 预览`} /> : selectedMaterial.status === 'PROCESSING' ? <div className="drawer-empty"><strong>正在生成预览</strong><p>文档已经安全保存，正在生成预览，期间可下载原文件。</p></div> : <div className="drawer-empty"><strong>预览生成失败</strong><p>{selectedMaterial.errorMessage || '可以下载原文件或重新生成预览。'}</p>{!selectedMaterial.deletedAt && <button className="button secondary small" onClick={() => retry(selectedMaterial)}>重新生成预览</button>}</div>}</div></aside></div>}
 
-    {changeOpen && <div className="drawer-backdrop" onClick={() => setChangeOpen(false)}><aside className="change-drawer" role="dialog" aria-modal="true" aria-labelledby="workspace-change-title" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Version changes</span><h2 id="workspace-change-title">v{workspace.versionNo} 版本变更</h2><p>{workspace.versionNo > 1 ? `上传时相较于 v${workspace.versionNo - 1}` : '首个版本，无上一版本可比较'}</p></div><button className="drawer-close" aria-label="关闭版本变更" onClick={() => setChangeOpen(false)}>×</button></div><div className="drawer-meta"><span className={`status ${workspace.status}`}>{workspace.status}</span><strong>{workspace.sourceFileName || '历史上传（未记录原名）'}</strong><span>{new Date(workspace.createdAt).toLocaleString('zh-CN')}</span></div>{workspace.note && <div className="drawer-note"><span>上传备注</span><p>{workspace.note}</p></div>}<div className="drawer-section-title">变更内容</div>{workspace.changeContent ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: workspace.changeContent }} /> : <div className="drawer-empty"><strong>未填写版本变更</strong><p>可通过“管理版本”补充。</p></div>}</aside></div>}
+    {changeOpen && <div className="drawer-backdrop" onClick={() => setChangeOpen(false)}><aside className="change-drawer" role="dialog" aria-modal="true" aria-labelledby="workspace-change-title" onClick={event => event.stopPropagation()}><div className="drawer-head"><div><span className="eyebrow">Version changes</span><h2 id="workspace-change-title">v{workspace.versionNo} 版本变更</h2><p><VersionBaselineInfo version={workspace} /></p></div><button className="drawer-close" aria-label="关闭版本变更" onClick={() => setChangeOpen(false)}>×</button></div><div className="drawer-meta"><span className={`status ${workspace.status}`}>{versionStatusLabel(workspace.status)}</span><strong>{workspace.sourceFileName || '历史上传（未记录原名）'}</strong><span>{new Date(workspace.createdAt).toLocaleString('zh-CN')}</span></div>{workspace.note && <div className="drawer-note"><span>上传备注</span><p>{workspace.note}</p></div>}<div className="drawer-section-title">变更内容</div>{workspace.changeContent ? <div className="rich-content" dangerouslySetInnerHTML={{ __html: workspace.changeContent }} /> : <div className="drawer-empty"><strong>未填写版本变更</strong><p>可通过“管理版本”补充。</p></div>}</aside></div>}
 
     {editMaterial && <div className="modal-backdrop"><form className="modal" onSubmit={saveMaterial}><h2>管理迭代材料</h2><p className="immutable-note">原文件内容不可覆盖；改名时必须保留 {editMaterial.extension} 扩展名。</p><label className="field">显示名称<input autoFocus required maxLength={180} value={editName} onChange={event => setEditName(event.target.value)} /></label><label className="field">分类<select value={editCategory} onChange={event => setEditCategory(event.target.value as Category)}>{CATEGORIES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label className="field">标签<input value={editTags} onChange={event => setEditTags(event.target.value)} placeholder="接口, 评审（逗号分隔）" /></label>{editError && <p className="error">{editError}</p>}<div className="modal-actions"><button type="button" className="button ghost" onClick={() => setEditMaterial(null)}>取消</button><button className="button primary" disabled={savingMaterial}>{savingMaterial ? '保存中…' : '保存修改'}</button></div></form></div>}
 
-    {manageVersionOpen && <div className="modal-backdrop"><form className="modal" onSubmit={saveVersion}><h2>管理 v{workspace.versionNo}</h2><p className="immutable-note">版本文件、版本号和入口路径不可修改；版本备注和变更说明可以修订。</p><label className="field">版本备注<textarea maxLength={2000} value={versionNote} onChange={event => setVersionNote(event.target.value)} /></label><label className="field">版本变更内容 <span className="optional-label">选填 · 相较上一版本</span><RichTextEditor value={versionChange} onChange={setVersionChange} placeholder="填写新增、优化和修复内容" /></label>{referenced && <p className="form-hint">当前版本被预览版或发布版引用，需要先在时间线切换指针后才能删除。</p>}{versionError && <p className="error">{versionError}</p>}<div className="modal-actions split-actions"><button type="button" className="button ghost-danger" disabled={referenced || savingVersion} onClick={deleteVersion}>删除版本</button><span className="action-spacer" /><button type="button" className="button ghost" onClick={() => setManageVersionOpen(false)}>取消</button><button className="button primary" disabled={savingVersion}>{savingVersion ? '保存中…' : '保存版本信息'}</button></div></form></div>}
+    {manageVersionOpen && <div className="modal-backdrop"><form className="modal" onSubmit={saveVersion}><h2>管理 v{workspace.versionNo}</h2><p className="immutable-note">版本文件、版本号和入口路径不可修改；版本备注和变更说明可以修订。</p><label className="field">版本备注<textarea maxLength={2000} value={versionNote} onChange={event => setVersionNote(event.target.value)} /></label><label className="field">版本变更内容 <span className="optional-label">选填 · 相较记录的比较基线</span><RichTextEditor value={versionChange} onChange={setVersionChange} placeholder="填写新增、优化和修复内容" /></label>{referenced && <p className="form-hint">当前版本被预览版或发布原型引用，需要先在时间线切换指针后才能删除。</p>}{versionError && <p className="error">{versionError}</p>}<div className="modal-actions split-actions"><button type="button" className="button ghost-danger" disabled={referenced || savingVersion} onClick={deleteVersion}>删除版本</button><span className="action-spacer" /><button type="button" className="button ghost" onClick={() => setManageVersionOpen(false)}>取消</button><button className="button primary" disabled={savingVersion}>{savingVersion ? '保存中…' : '保存版本信息'}</button></div></form></div>}
   </div>;
 }
